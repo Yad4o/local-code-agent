@@ -24,6 +24,7 @@ class Config:
     temperature: float = 0.2
     keep_alive: str = "30m"                     # keep model loaded between calls
     request_timeout: float = 300.0
+    allow_remote_llm: bool = False              # False = refuse any non-local base_url (offline guarantee)
     # --- agent loop ---
     max_attempts: int = 4                       # tries per phase (tests / implementation)
     stop_on_failure: bool = True

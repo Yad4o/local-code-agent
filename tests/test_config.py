@@ -12,6 +12,7 @@ def test_defaults_are_safe_for_a_small_laptop():
     assert c.min_free_mem_mb > 0
     assert c.max_temp_c < 100
     assert c.stop_on_failure is True
+    assert c.allow_remote_llm is False      # offline by default
     assert set(c.allowed_commands) == {"python", "python3", "pytest"}
 
 
