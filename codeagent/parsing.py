@@ -1,0 +1,91 @@
+"""Parse the model's reply. A tiny model follows a simple, rigid format far
+better than JSON/tool-calls:
+
+    FILE: path/to/file.py
+    ```python
+    ...code...
+    ```
+"""
+import re
+from dataclasses import dataclass, field
+
+HEADER = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:file|path)\s*:\s*`?([^`*\n]+?)`?(?:\*\*)?\s*$", re.I
+)
+INLINE_PATH = re.compile(r"^\s*(?:#|//|--|/\*)\s*(?:file|path)\s*:\s*(\S+?)\s*(?:\*/)?\s*$", re.I)
+FENCE_OPEN = re.compile(r"^\s*```[\w+.\-]*\s*$")
+FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+
+
+@dataclass(frozen=True)
+class FileBlock:
+    path: str
+    content: str
+
+
+@dataclass
+class ParseResult:
+    blocks: list[FileBlock] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove Qwen-style <think>...</think> reasoning (closed, unclosed or half-open)."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    if "</think>" in text:                       # opening tag was cut off
+        text = text.rsplit("</think>", 1)[1]
+    if "<think>" in text:                        # reasoning never finished
+        text = text.split("<think>", 1)[0]
+    return text.strip()
+
+
+def _norm_path(p: str) -> str:
+    p = p.strip()
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def parse_file_blocks(text: str) -> ParseResult:
+    result = ParseResult()
+    found: dict[str, str] = {}
+    pending: str | None = None      # path waiting for its opening fence
+    collecting = False              # inside a fenced block
+    block_path: str | None = None   # path for the block being collected (None = anonymous)
+    lines_acc: list[str] = []
+
+    def finish(path: str | None, lines: list[str]) -> None:
+        if path is None and lines:
+            m = INLINE_PATH.match(lines[0])
+            if m:
+                path, lines = m.group(1), lines[1:]
+        if path is None:
+            return
+        found[_norm_path(path)] = "".join(l + "\n" for l in lines)
+
+    for line in strip_thinking(text).replace("\r\n", "\n").split("\n"):
+        if collecting:
+            if FENCE_CLOSE.match(line):
+                finish(block_path, lines_acc)
+                collecting, block_path, lines_acc = False, None, []
+            else:
+                lines_acc.append(line)
+            continue
+        if pending is not None:
+            if not line.strip():
+                continue
+            if FENCE_OPEN.match(line):
+                collecting, block_path, lines_acc, pending = True, pending, [], None
+                continue
+            pending = None                       # header without a fence: forget it
+        m = HEADER.match(line)
+        if m:
+            pending = m.group(1)
+        elif FENCE_OPEN.match(line):
+            collecting, block_path, lines_acc = True, None, []
+
+    if collecting and block_path is not None:
+        result.problems.append(f"{_norm_path(block_path)}: reply looks truncated (code block never closed)")
+
+    result.blocks = [FileBlock(p, c) for p, c in found.items()]
+    return result
