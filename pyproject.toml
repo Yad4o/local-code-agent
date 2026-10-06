@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeagent"
+version = "0.1.0"
+description = "Offline, resource-safe coding agent that executes structured plans with a small local LLM"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []            # stdlib only: nothing to download, works offline
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+codeagent = "codeagent.cli:main"
+
+[tool.setuptools]
+packages = ["codeagent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
