@@ -1,0 +1,326 @@
+import os
+import subprocess
+
+import pytest
+
+from codeagent import git
+from codeagent.config import Config
+from codeagent.llm import LLMError
+from codeagent.plan import PlanError, parse_plan
+from codeagent.runner import Runner
+from codeagent.state import WorkspaceBusy, WorkspaceLock
+from codeagent.workspace import Workspace
+
+
+# ----------------------------------------------------------------- helpers
+
+def block(path, code):
+    body = f"{code}\n" if code else ""
+    return f"FILE: {path}\n```python\n{body}```\n"
+
+
+TEST_CORE = block("tests/test_core.py",
+                  "from slugify.core import slugify\n\n"
+                  "def test_basic():\n    assert slugify('Hello, World!') == 'hello-world'\n")
+TEST_VACUOUS = block("tests/test_core.py", "def test_nothing():\n    assert True\n")
+INIT = block("slugify/__init__.py", "")
+CORE_OK = block("slugify/core.py",
+                "import re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n")
+CORE_BAD = block("slugify/core.py", "def slugify(t):\n    return t\n")
+
+TEST_EXTRA = block("tests/test_extra.py",
+                   "from slugify.extra import shout\n\ndef test_shout():\n    assert shout('hi') == 'HI!'\n")
+EXTRA_OK = block("slugify/extra.py", "def shout(t):\n    return t.upper() + '!'\n")
+
+
+def plan_text(*, two=False, test_command="python -m pytest -q"):
+    text = f'''
+title = "Slugify utility"
+test_command = "{test_command}"
+
+[[step]]
+title = "core function"
+description = "Create slugify(text) in slugify/core.py. 'Hello, World!' -> 'hello-world'."
+commit = "feat: add slugify core function"
+tests = ["tests/test_core.py"]
+files = ["slugify/__init__.py", "slugify/core.py"]
+'''
+    if two:
+        text += '''
+[[step]]
+title = "shout helper"
+description = "Create shout(text) in slugify/extra.py returning the text upper-cased plus '!'."
+commit = "feat: add shout helper"
+tests = ["tests/test_extra.py"]
+files = ["slugify/extra.py"]
+'''
+    return text
+
+
+class FakeLLM:
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def chat(self, messages):
+        self.calls.append(messages)
+        assert self.replies, "unexpected extra LLM call"
+        r = self.replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+class FakeGuard:
+    def __init__(self, ok=True):
+        self.ok = ok
+
+    def wait_until_ok(self, **kw):
+        return self.ok
+
+
+@pytest.fixture(autouse=True)
+def isolated_git(tmp_path_factory, monkeypatch):
+    cfg = tmp_path_factory.mktemp("gitcfg") / "gitconfig"
+    cfg.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    monkeypatch.setenv("HOME", str(cfg.parent))
+
+
+@pytest.fixture
+def cfg():
+    return Config(step_cooldown_s=0, max_attempts=3, test_timeout=60)
+
+
+def make_runner(tmp_path, llm, cfg, *, two=False, guard=None, sleep=None, stop=None, **plan_kw):
+    plan = parse_plan(plan_text(two=two, **plan_kw))
+    ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
+    return Runner(cfg, plan, ws, llm, guard=guard or FakeGuard(), log=lambda m: None,
+                  sleep=sleep or (lambda s: None), should_stop=stop or (lambda: False)), ws
+
+
+def log_subjects(root):
+    out = subprocess.run(["git", "log", "--format=%s"], cwd=root, capture_output=True, text=True).stdout
+    return out.split("\n")[:-1]
+
+
+# ----------------------------------------------------------------- happy path
+
+def test_happy_path_writes_tests_then_code_then_commits(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    report = r.run()
+    assert report.outcome == "done"
+    assert [x.status for x in report.results] == ["done"]
+    assert report.results[0].commit
+    assert ws.read("slugify/core.py").startswith("import re")
+    assert ws.read("tests/test_core.py").startswith("from slugify.core")
+    assert len(llm.calls) == 2
+    assert log_subjects(ws.root) == ["feat: add slugify core function"]
+    assert git.current_branch(ws.root) == "agent/slugify-utility"
+
+
+def test_commit_contains_exactly_the_step_files(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    (ws.root / "unrelated.txt").write_text("mine")
+    r.run()
+    files = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=ws.root,
+                           capture_output=True, text=True).stdout.split()
+    assert sorted(files) == ["slugify/__init__.py", "slugify/core.py", "tests/test_core.py"]
+
+
+def test_tests_prompt_comes_first_and_impl_prompt_contains_the_tests(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    first = llm.calls[0][1]["content"]
+    second = llm.calls[1][1]["content"]
+    assert "FAIL" in first.upper() and "tests/test_core.py" in first
+    assert "assert slugify('Hello, World!') == 'hello-world'" in second
+
+
+def test_two_steps_two_commits(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK, TEST_EXTRA, EXTRA_OK)
+    r, ws = make_runner(tmp_path, llm, cfg, two=True)
+    report = r.run()
+    assert [x.status for x in report.results] == ["done", "done"]
+    assert log_subjects(ws.root) == ["feat: add shout helper", "feat: add slugify core function"]
+
+
+# ----------------------------------------------------------------- retries
+
+def test_failing_implementation_is_retried_with_the_test_output(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_BAD, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    report = r.run()
+    assert report.outcome == "done"
+    assert report.results[0].attempts == 3
+    retry_prompt = llm.calls[2][1]["content"]
+    assert "AssertionError" in retry_prompt               # real pytest output fed back
+    assert "return t" in retry_prompt                      # and the code it wrote last time
+
+
+def test_reply_without_file_blocks_gets_format_feedback_then_recovers(tmp_path, cfg):
+    llm = FakeLLM("Sure, I would write some tests for you!", TEST_CORE, INIT + CORE_OK)
+    report = make_runner(tmp_path, llm, cfg)[0].run()
+    assert report.outcome == "done"
+    assert "FILE" in llm.calls[1][1]["content"]
+    assert "no FILE blocks" in llm.calls[1][1]["content"] or "missing" in llm.calls[1][1]["content"]
+
+
+def test_syntax_error_is_caught_before_running_and_not_written(tmp_path, cfg):
+    broken = block("slugify/core.py", "def slugify(:\n    pass\n")
+    llm = FakeLLM(TEST_CORE, INIT + broken, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "syntax error" in llm.calls[2][1]["content"].lower()
+
+
+def test_vacuous_tests_that_pass_without_implementation_are_rejected(tmp_path, cfg):
+    llm = FakeLLM(TEST_VACUOUS, TEST_CORE, INIT + CORE_OK)
+    report = make_runner(tmp_path, llm, cfg)[0].run()
+    assert report.outcome == "done"
+    assert "PASS" in llm.calls[1][1]["content"]
+    assert llm.calls[2][1]["content"].count("test_nothing") == 0   # replaced tests are used
+
+
+def test_missing_init_file_is_created_automatically(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, CORE_OK)                     # model forgot slugify/__init__.py
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert ws.exists("slugify/__init__.py")
+
+
+# ----------------------------------------------------------------- safety
+
+def test_files_outside_the_step_are_ignored(tmp_path, cfg):
+    sneaky = block("setup.py", "import os\nos.system('echo pwned')\n") + block("../escape.py", "x = 1\n")
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK + sneaky)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert not ws.exists("setup.py")
+    assert not (ws.root.parent / "escape.py").exists()
+
+
+def test_model_cannot_rewrite_the_tests_while_implementing(tmp_path, cfg):
+    cheat = block("tests/test_core.py", "def test_basic():\n    assert True\n")
+    llm = FakeLLM(TEST_CORE, INIT + CORE_BAD + cheat, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "slugify('Hello, World!') == 'hello-world'" in ws.read("tests/test_core.py")
+
+
+def test_failed_step_is_rolled_back_completely(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_BAD, INIT + CORE_BAD, INIT + CORE_BAD)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    ws.write("slugify/core.py", "# my own earlier work\n")
+    report = r.run()
+    assert report.outcome == "failed"
+    assert report.results[0].status == "failed"
+    assert "attempts" in report.results[0].reason
+    assert ws.read("slugify/core.py") == "# my own earlier work\n"      # restored, not deleted
+    assert not ws.exists("tests/test_core.py")                           # new file removed
+    assert not ws.exists("slugify/__init__.py")
+    assert log_subjects(ws.root) == [] or "feat: add slugify core function" not in log_subjects(ws.root)
+
+
+def test_tests_phase_gives_up_after_max_attempts(tmp_path, cfg):
+    llm = FakeLLM("nope", "still nope", "no blocks again")
+    report = make_runner(tmp_path, llm, cfg)[0].run()
+    assert report.outcome == "failed"
+    assert "tests" in report.results[0].reason.lower()
+    assert len(llm.calls) == cfg.max_attempts
+
+
+def test_disallowed_test_command_is_refused_up_front(tmp_path, cfg):
+    with pytest.raises(PlanError, match="allowed"):
+        make_runner(tmp_path, FakeLLM(), cfg, test_command="make test")
+
+
+def test_already_satisfied_step_skips_implementation(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE)                                # only the tests are requested
+    r, ws = make_runner(tmp_path, llm, cfg)
+    ws.write("slugify/__init__.py", "")
+    ws.write("slugify/core.py", "import re\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+','-',t.lower()).strip('-')\n")
+    report = r.run()
+    assert report.outcome == "done" and len(llm.calls) == 1
+
+
+# ----------------------------------------------------------------- failure policy
+
+def test_stop_on_failure_true_does_not_attempt_later_steps(tmp_path, cfg):
+    llm = FakeLLM("no", "no", "no")
+    r, ws = make_runner(tmp_path, llm, cfg, two=True)
+    report = r.run()
+    assert [x.status for x in report.results] == ["failed"]
+
+
+def test_stop_on_failure_false_continues_with_later_steps(tmp_path, cfg):
+    cfg.stop_on_failure = False
+    llm = FakeLLM("no", "no", "no", TEST_EXTRA, EXTRA_OK)
+    r, ws = make_runner(tmp_path, llm, cfg, two=True)
+    report = r.run()
+    assert [x.status for x in report.results] == ["failed", "done"]
+    assert report.outcome == "failed"
+
+
+# ----------------------------------------------------------------- pause / resume
+
+def test_model_server_down_pauses_and_rolls_back(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, LLMError("cannot reach the model server"))
+    r, ws = make_runner(tmp_path, llm, cfg)
+    report = r.run()
+    assert report.outcome == "paused"
+    assert "cannot reach" in report.results[0].reason
+    assert not ws.exists("tests/test_core.py")
+
+
+def test_resources_unavailable_pauses_without_calling_the_model(tmp_path, cfg):
+    llm = FakeLLM()
+    r, ws = make_runner(tmp_path, llm, cfg, guard=FakeGuard(ok=False))
+    report = r.run()
+    assert report.outcome == "paused"
+    assert llm.calls == []
+
+
+def test_stop_request_pauses_before_next_step(tmp_path, cfg):
+    llm = FakeLLM()
+    r, ws = make_runner(tmp_path, llm, cfg, stop=lambda: True)
+    report = r.run()
+    assert report.outcome == "paused" and llm.calls == []
+
+
+def test_resume_skips_steps_that_are_already_done(tmp_path, cfg):
+    cfg.stop_on_failure = True
+    llm1 = FakeLLM(TEST_CORE, INIT + CORE_OK, "x", "y", "z")      # step 2 fails
+    r1, ws = make_runner(tmp_path, llm1, cfg, two=True)
+    assert [s.status for s in r1.run().results] == ["done", "failed"]
+
+    llm2 = FakeLLM(TEST_EXTRA, EXTRA_OK)                           # only step 2 needs the model
+    r2, _ = make_runner(tmp_path, llm2, cfg, two=True)
+    report = r2.run()
+    assert [s.status for s in report.results] == ["skipped", "done"]
+    assert len(llm2.calls) == 2
+
+
+def test_cooldown_sleep_happens_after_each_model_call(tmp_path, cfg):
+    cfg.step_cooldown_s = 1.5
+    slept = []
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg, sleep=slept.append)[0].run()
+    assert slept == [1.5, 1.5]
+
+
+def test_second_agent_on_the_same_workspace_is_refused(tmp_path, cfg):
+    r, ws = make_runner(tmp_path, FakeLLM(), cfg)
+    with WorkspaceLock(ws.root):
+        with pytest.raises(WorkspaceBusy):
+            r.run()
+
+
+def test_report_summary_is_readable(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    report = make_runner(tmp_path, llm, cfg)[0].run()
+    s = report.summary()
+    assert "Slugify utility" in s and "core function" in s and "done" in s.lower()
