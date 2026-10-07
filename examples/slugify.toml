@@ -1,0 +1,44 @@
+# Example: three small steps. Each step is one function: ideal for a small local model.
+title = "Slugify utility"
+test_command = "python -m pytest -q"
+# workspace = "~/agent-projects/slugify"     # needed for daemon mode; or use `run --workspace DIR`
+
+[[step]]
+title = "slugify lowercases and joins words with dashes"
+description = """
+Create function slugify(text: str) -> str in slugify/core.py (package: slugify).
+Lowercase the text, replace each run of non-alphanumeric characters with a
+single "-", and strip leading/trailing "-".
+Examples: "Hello, World!" -> "hello-world"; "  A  B " -> "a-b"; "" -> "".
+Tests must import it with: from slugify.core import slugify
+"""
+commit = "feat: add slugify core function"
+tests = ["tests/test_core.py"]
+files = ["slugify/__init__.py", "slugify/core.py"]
+
+[[step]]
+title = "is_slug validates a slug"
+description = """
+Create function is_slug(text: str) -> bool in slugify/validate.py.
+True only for non-empty text made of lowercase letters, digits and single
+dashes, not starting or ending with a dash.
+Examples: "hello-world" -> True; "Hello" -> False; "a--b" -> False; "-a" -> False; "" -> False.
+Tests must import it with: from slugify.validate import is_slug
+"""
+commit = "feat: add is_slug validator"
+tests = ["tests/test_validate.py"]
+files = ["slugify/validate.py"]
+
+[[step]]
+title = "truncate_slug cuts at a dash"
+description = """
+Create function truncate_slug(slug: str, max_length: int) -> str in slugify/truncate.py.
+If the slug is longer than max_length, cut it to max_length characters, then
+remove a trailing partial word and trailing dashes.
+Examples: ("hello-world", 7) -> "hello"; ("hello-world", 11) -> "hello-world"; ("abc", 2) -> "ab".
+(If there is no dash to cut at, just cut to max_length.)
+Tests must import it with: from slugify.truncate import truncate_slug
+"""
+commit = "feat: add truncate_slug"
+tests = ["tests/test_truncate.py"]
+files = ["slugify/truncate.py"]
