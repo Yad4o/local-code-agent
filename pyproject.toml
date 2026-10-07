@@ -14,7 +14,7 @@ dependencies = []            # stdlib only: nothing to download, works offline
 dev = ["pytest"]
 
 [project.scripts]
-codeagent = "codeagent.cli:main"
+codeagent = "codeagent.cli:entry"
 
 [tool.setuptools]
 packages = ["codeagent"]
