@@ -132,7 +132,7 @@ def test_memory_limit_stops_a_memory_hog(tmp_path):
 
 
 def test_secrets_are_not_passed_to_the_command(tmp_path, monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "ghp_secret")
+    monkeypatch.setenv("GH_TOKEN", "fake-secret-value")
     monkeypatch.setenv("MY_API_KEY", "k")
     monkeypatch.setenv("DB_PASSWORD", "p")
     monkeypatch.setenv("HARMLESS", "ok")
