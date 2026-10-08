@@ -159,3 +159,38 @@ def test_non_local_or_odd_urls_are_refused(url):
 
 def test_remote_allowed_only_with_explicit_flag():
     make_client(Config(base_url="http://192.168.1.20:11434", allow_remote_llm=True))
+
+
+# --- truncation awareness + per-call overrides -------------------------------------
+
+def test_ollama_length_stop_marks_the_reply_as_truncated(stub):
+    stub.responses = [(200, {"message": {"content": "partial"}, "done": True, "done_reason": "length"})]
+    r = make_client(cfg_for(stub)).chat(MSGS)
+    assert r == "partial" and r.truncated is True
+
+
+@pytest.mark.parametrize("extra", [{"done_reason": "stop"}, {}])
+def test_ollama_normal_stop_is_not_truncated(stub, extra):
+    stub.responses = [(200, {"message": {"content": "whole"}, "done": True, **extra})]
+    assert make_client(cfg_for(stub)).chat(MSGS).truncated is False
+
+
+def test_openai_finish_reason_length_is_truncated(stub):
+    stub.responses = [(200, {"choices": [{"message": {"content": "cut"}, "finish_reason": "length"}]})]
+    assert make_client(cfg_for(stub, backend="openai")).chat(MSGS).truncated is True
+    stub.responses = [(200, {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]})]
+    assert make_client(cfg_for(stub, backend="openai")).chat(MSGS).truncated is False
+
+
+def test_per_call_temperature_and_token_budget_override_the_config(stub):
+    stub.responses = [ollama_reply("x")]
+    make_client(cfg_for(stub, temperature=0.2, num_predict=1500)).chat(MSGS, temperature=0.7, num_predict=400)
+    opts = stub.requests[0][2]["options"]
+    assert opts["temperature"] == 0.7 and opts["num_predict"] == 400
+
+
+def test_per_call_overrides_for_openai_backend(stub):
+    stub.responses = [openai_reply("x")]
+    make_client(cfg_for(stub, backend="openai")).chat(MSGS, temperature=0.9, num_predict=300)
+    body = stub.requests[0][2]
+    assert body["temperature"] == 0.9 and body["max_tokens"] == 300

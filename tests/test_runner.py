@@ -57,13 +57,21 @@ files = ["slugify/extra.py"]
     return text
 
 
+class Cut(str):
+    """A reply that hit the token limit (like Reply(truncated=True))."""
+
+    truncated = True
+
+
 class FakeLLM:
     def __init__(self, *replies):
         self.replies = list(replies)
         self.calls = []
+        self.kwargs = []
 
-    def chat(self, messages):
+    def chat(self, messages, **kw):
         self.calls.append(messages)
+        self.kwargs.append(kw)
         assert self.replies, "unexpected extra LLM call"
         r = self.replies.pop(0)
         if isinstance(r, Exception):
@@ -376,3 +384,34 @@ def test_replies_are_never_committed_to_the_project(tmp_path, cfg):
     r.run()
     tracked = subprocess.run(["git", "ls-files"], cwd=ws.root, capture_output=True, text=True).stdout
     assert ".codeagent" not in tracked
+
+
+# ----------------------------------------------------------------- cut-off / forgotten-fence replies
+
+def test_reply_cut_off_at_the_token_limit_is_salvaged_instead_of_rejected(tmp_path, cfg):
+    # exactly the failure seen on a real 0.8B model: the test file never ends
+    rambling = ("FILE: tests/test_core.py\n```python\nfrom slugify.core import slugify\n\n"
+                "def test_basic():\n    assert slugify('Hello, World!') == 'hello-world'\n\n"
+                "def test_again():\n    assert slugify(")
+    llm = FakeLLM(Cut(rambling), INIT + CORE_OK)
+    lines = []
+    r, ws = make_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 2                           # no wasted retry
+    assert "def test_again" not in ws.read("tests/test_core.py")
+    assert any("cut off" in l for l in lines)
+
+
+def test_unusable_cut_off_reply_gets_a_short_file_instruction(tmp_path, cfg):
+    useless = Cut("FILE: tests/test_core.py\n```python\ndef test_x(:\n")
+    llm = FakeLLM(useless, TEST_CORE, INIT + CORE_OK)
+    assert make_runner(tmp_path, llm, cfg)[0].run().outcome == "done"
+    assert "SHORTER" in llm.calls[1][1]["content"]
+
+
+def test_model_that_forgot_the_closing_fence_is_accepted(tmp_path, cfg):
+    no_fence = TEST_CORE.rstrip("\n").removesuffix("```").rstrip("\n") + "\n"
+    llm = FakeLLM(no_fence, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 2

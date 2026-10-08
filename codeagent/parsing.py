@@ -6,6 +6,7 @@ better than JSON/tool-calls:
     ...code...
     ```
 """
+import ast
 import re
 from dataclasses import dataclass, field
 
@@ -27,6 +28,7 @@ class FileBlock:
 class ParseResult:
     blocks: list[FileBlock] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)      # things we quietly fixed (worth logging)
 
 
 def strip_thinking(text: str) -> str:
@@ -46,7 +48,25 @@ def _norm_path(p: str) -> str:
     return p
 
 
-def parse_file_blocks(text: str) -> ParseResult:
+def _longest_valid_python_prefix(lines: list[str]) -> list[str] | None:
+    """Drop trailing lines until what is left parses as Python (None if nothing does)."""
+    for k in range(len(lines), 0, -1):
+        chunk = lines[:k]
+        if not any(l.strip() for l in chunk):
+            return None
+        try:
+            ast.parse("\n".join(chunk))
+        except SyntaxError:
+            continue
+        while chunk and not chunk[-1].strip():
+            chunk = chunk[:-1]
+        return chunk
+    return None
+
+
+def parse_file_blocks(text: str, *, truncated: bool = False) -> ParseResult:
+    """`truncated=True` means the model hit its token limit, so an unclosed block was CUT OFF
+    (repair it if it is Python). Otherwise an unclosed block just means it forgot the fence."""
     result = ParseResult()
     found: dict[str, str] = {}
     pending: str | None = None      # path waiting for its opening fence
@@ -85,7 +105,20 @@ def parse_file_blocks(text: str) -> ParseResult:
             collecting, block_path, lines_acc = True, None, []
 
     if collecting and block_path is not None:
-        result.problems.append(f"{_norm_path(block_path)}: reply looks truncated (code block never closed)")
+        path = _norm_path(block_path)
+        if not truncated:
+            finish(block_path, lines_acc)
+            result.notes.append(f"{path}: the closing ``` was missing; accepted the code anyway")
+        else:
+            kept = _longest_valid_python_prefix(lines_acc) if path.endswith(".py") else None
+            if kept:
+                found[path] = "".join(l + "\n" for l in kept)
+                result.notes.append(f"{path}: reply was cut off at the token limit; kept the first "
+                                    f"{len(kept)} of {len(lines_acc)} lines that form valid Python")
+            else:
+                result.problems.append(
+                    f"{path}: your reply was cut off because it was too long. Write a much SHORTER file: "
+                    "no repeated code, only a few small functions, and close the code block with ```")
 
     result.blocks = [FileBlock(p, c) for p, c in found.items()]
     return result

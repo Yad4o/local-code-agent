@@ -210,7 +210,9 @@ class Runner:
         return text
 
     def _collect(self, text: str, allowed: tuple[str, ...]) -> tuple[dict[str, str], list[str]]:
-        parsed = parse_file_blocks(text)
+        parsed = parse_file_blocks(str(text), truncated=bool(getattr(text, "truncated", False)))
+        for note in parsed.notes:
+            self.log(f"   fixed up: {note}")
         problems = list(parsed.problems)
         if not parsed.blocks and not problems:
             return {}, ["your reply contained no FILE blocks; reply only with: FILE: <path> then a fenced code block"]

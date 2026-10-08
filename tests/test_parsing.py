@@ -44,12 +44,6 @@ def test_header_text_inside_code_does_not_start_new_block():
     assert [b.path for b in blocks(text)] == ["a.py"]
 
 
-def test_truncated_block_is_reported_and_excluded():
-    r = parse_file_blocks("FILE: a.py\n```python\nA = 1\n```\nFILE: b.py\n```python\ndef f(:\n")
-    assert [b.path for b in r.blocks] == ["a.py"]
-    assert any("b.py" in p and "truncated" in p for p in r.problems)
-
-
 def test_duplicate_paths_last_one_wins():
     r = blocks("FILE: a.py\n```\n1\n```\nFILE: a.py\n```\n2\n```")
     assert [(b.path, b.content) for b in r] == [("a.py", "2\n")]
@@ -85,3 +79,47 @@ def test_stray_closing_tag_keeps_text_after_it():
 def test_file_block_inside_thinking_is_ignored():
     text = "<think>FILE: x.py\n```\nbad\n```</think>\nFILE: a.py\n```\nok\n```"
     assert [b.path for b in blocks(text)] == ["a.py"]
+
+
+# --- unclosed fences: forgot-to-close vs. cut-off-at-the-token-limit ---------------------
+
+def test_model_that_just_forgot_the_closing_fence_is_accepted():
+    r = parse_file_blocks("FILE: a.py\n```python\nA = 1\n")
+    assert r.blocks == [FileBlock("a.py", "A = 1\n")]
+    assert r.problems == []
+    assert any("a.py" in n and "closing" in n for n in r.notes)
+
+
+def test_cut_off_python_is_repaired_to_the_longest_valid_prefix():
+    text = "FILE: t.py\n```python\ndef test_a():\n    assert 1 == 1\n\ndef test_b():\n    assert slugify("
+    r = parse_file_blocks(text, truncated=True)
+    assert r.problems == []
+    assert r.blocks == [FileBlock("t.py", "def test_a():\n    assert 1 == 1\n")]
+    assert any("cut off" in n for n in r.notes)
+
+
+def test_endlessly_repeating_output_is_salvaged_too():
+    body = "".join(f"def test_{i}():\n    assert {i} == {i}\n\n" for i in range(50)) + "def test_50():\n    assert 50 =="
+    r = parse_file_blocks(f"FILE: t.py\n```python\n{body}", truncated=True)
+    assert r.problems == []
+    assert r.blocks[0].content.count("def test_") == 50
+
+
+def test_cut_off_with_nothing_valid_is_a_problem_with_advice():
+    r = parse_file_blocks("FILE: b.py\n```python\ndef f(:\n", truncated=True)
+    assert r.blocks == []
+    assert len(r.problems) == 1
+    assert "b.py" in r.problems[0] and "cut off" in r.problems[0] and "SHORTER" in r.problems[0]
+
+
+def test_cut_off_non_python_file_cannot_be_repaired():
+    r = parse_file_blocks("FILE: notes.txt\n```\nhalf a sentence", truncated=True)
+    assert r.blocks == []
+    assert "cut off" in r.problems[0]
+
+
+def test_earlier_complete_blocks_survive_a_cut_off_last_block():
+    text = "FILE: a.py\n```python\nA = 1\n```\nFILE: b.py\n```python\ndef f(:\n"
+    r = parse_file_blocks(text, truncated=True)
+    assert [b.path for b in r.blocks] == ["a.py"]
+    assert any("b.py" in p for p in r.problems)

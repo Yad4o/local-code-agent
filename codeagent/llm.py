@@ -18,8 +18,21 @@ class LLMError(Exception):
     pass
 
 
+class Reply(str):
+    """The model's text. `.truncated` is True if it hit the token limit (it was cut off)."""
+
+    truncated: bool = False
+
+
+def _reply(text: str, truncated: bool) -> Reply:
+    r = Reply(text)
+    r.truncated = truncated
+    return r
+
+
 class LLMClient(Protocol):
-    def chat(self, messages: list[dict]) -> str: ...
+    def chat(self, messages: list[dict], *, temperature: float | None = None,
+             num_predict: int | None = None) -> str: ...
 
 
 def _check_url(cfg: Config) -> str:
@@ -89,39 +102,45 @@ class _BaseClient:
         raise last  # type: ignore[misc]
 
     @staticmethod
-    def _finish(text) -> str:
+    def _finish(text, truncated: bool = False) -> Reply:
         if not isinstance(text, str):
             raise LLMError("unexpected response shape from the model server")
         text = strip_thinking(text)
         if not text.strip():
             raise LLMError("model returned an empty reply")
-        return text
+        return _reply(text, truncated)
 
 
 class OllamaClient(_BaseClient):
-    def chat(self, messages: list[dict]) -> str:
+    def chat(self, messages: list[dict], *, temperature: float | None = None,
+             num_predict: int | None = None) -> Reply:
         c = self.cfg
         data = self._request("/api/chat", {
             "model": c.model, "messages": messages, "stream": False,
             "think": False,                                # tiny models: skip slow hidden reasoning
             "keep_alive": c.keep_alive,
-            "options": {"num_ctx": c.num_ctx, "num_predict": c.num_predict, "temperature": c.temperature},
+            "options": {"num_ctx": c.num_ctx,
+                        "num_predict": num_predict if num_predict is not None else c.num_predict,
+                        "temperature": temperature if temperature is not None else c.temperature},
         })
         try:
-            return self._finish(data["message"]["content"])
+            return self._finish(data["message"]["content"], data.get("done_reason") == "length")
         except (KeyError, TypeError) as e:
             raise LLMError("unexpected response shape from Ollama") from e
 
 
 class OpenAIClient(_BaseClient):
-    def chat(self, messages: list[dict]) -> str:
+    def chat(self, messages: list[dict], *, temperature: float | None = None,
+             num_predict: int | None = None) -> Reply:
         c = self.cfg
         data = self._request("/v1/chat/completions", {
             "model": c.model, "messages": messages, "stream": False,
-            "max_tokens": c.num_predict, "temperature": c.temperature,
+            "max_tokens": num_predict if num_predict is not None else c.num_predict,
+            "temperature": temperature if temperature is not None else c.temperature,
         })
         try:
-            return self._finish(data["choices"][0]["message"]["content"])
+            choice = data["choices"][0]
+            return self._finish(choice["message"]["content"], choice.get("finish_reason") == "length")
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError("unexpected response shape from the server") from e
 
