@@ -85,3 +85,8 @@ def test_env_overrides_model_and_base_url(tmp_path, monkeypatch):
     c = load_config(f)
     assert c.model == "from-env"
     assert c.base_url == "http://127.0.0.1:9999"
+
+
+def test_test_writing_budget_is_smaller_than_the_general_budget():
+    c = Config()
+    assert 16 <= c.num_predict_tests <= c.num_predict

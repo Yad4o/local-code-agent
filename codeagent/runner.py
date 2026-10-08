@@ -139,7 +139,8 @@ class Runner:
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step.context))
             text = self._ask(build_tests_prompt(self.plan, step, existing, self.cfg.max_context_chars, feedback),
-                             step=step, phase="tests", attempt=n)
+                             step=step, phase="tests", attempt=n,
+                             num_predict=min(self.cfg.num_predict_tests, self.cfg.num_predict))
             files, problems = self._collect(text, step.tests)
             if problems:
                 feedback = _bullets(problems)
@@ -167,7 +168,8 @@ class Runner:
             existing = self._read_many((*step.files, *step.context))
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
                                                self.cfg.max_context_chars, output, feedback),
-                             step=step, phase="impl", attempt=n)
+                             step=step, phase="impl", attempt=n,
+                             num_predict=self.cfg.num_predict)
             files, problems = self._collect(text, step.files)
             if problems:
                 feedback = _bullets(problems)
@@ -185,7 +187,13 @@ class Runner:
         raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
 
     # ------------------------------------------------------------------ pieces
-    def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int) -> str:
+    def _retry_temperature(self, attempt: int) -> float:
+        """Attempt 1 uses the configured temperature; each retry runs hotter. A small model that
+        fell into a loop at a low temperature would otherwise repeat the exact same loop."""
+        return min(self.cfg.temperature + 0.25 * (attempt - 1), 1.0)
+
+    def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int,
+             num_predict: int | None = None) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
         ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
@@ -194,16 +202,17 @@ class Runner:
             if self.should_stop():
                 raise _Pause("stop requested")
             raise _Pause("system resources stayed too low; will retry later")
+        temperature = self._retry_temperature(attempt)
         started = time.monotonic()
         try:
             self.attempts += 1
-            text = self.llm.chat(messages)
+            text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict)
         except LLMError as e:
             raise _Pause(f"model unavailable: {e}") from e
         seconds = time.monotonic() - started
         truncated = bool(getattr(text, "truncated", False))
         self.replies.save(step.title, phase, attempt, str(text), seconds=seconds, truncated=truncated,
-                          temperature=self.cfg.temperature)
+                          temperature=temperature)
         self.log(f"   model replied in {seconds:.0f}s ({len(text)} chars)"
                  + (" - CUT OFF at the token limit" if truncated else ""))
         self.sleep(self.cfg.step_cooldown_s)              # let the laptop breathe

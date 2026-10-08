@@ -21,6 +21,7 @@ class Config:
     model: str = "qwen3.5:0.8b"                 # run `codeagent doctor` to list installed models
     num_ctx: int = 4096                         # context window; keep small for 2 GB VRAM
     num_predict: int = 1536                     # max tokens generated per call
+    num_predict_tests: int = 700                # smaller cap while writing tests (a rambling reply costs less time)
     temperature: float = 0.2
     keep_alive: str = "30m"                     # keep model loaded between calls
     request_timeout: float = 300.0
@@ -49,6 +50,7 @@ class Config:
 _RANGES: dict[str, tuple[float, float]] = {
     "num_ctx": (512, 131072),
     "num_predict": (16, 32768),
+    "num_predict_tests": (16, 32768),
     "temperature": (0.0, 2.0),
     "request_timeout": (1, 86400),
     "max_attempts": (1, 20),

@@ -415,3 +415,46 @@ def test_model_that_forgot_the_closing_fence_is_accepted(tmp_path, cfg):
     r, ws = make_runner(tmp_path, llm, cfg)
     assert r.run().outcome == "done"
     assert len(llm.calls) == 2
+
+
+# ----------------------------------------------------------------- retries must not repeat themselves
+
+def test_first_attempt_uses_the_configured_temperature_and_retries_run_hotter(tmp_path, cfg):
+    cfg.temperature = 0.2
+    llm = FakeLLM("no blocks", "still none", TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    temps = [k["temperature"] for k in llm.kwargs]
+    assert temps[0] == 0.2
+    assert temps[1] > temps[0] and temps[2] > temps[1]    # deterministic loops get broken up
+
+
+def test_retry_temperature_is_capped(tmp_path):
+    cfg = Config(step_cooldown_s=0, max_attempts=12, temperature=0.9, test_timeout=60)
+    llm = FakeLLM(*["nope"] * 12)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert max(k["temperature"] for k in llm.kwargs) <= 1.0
+
+
+def test_test_writing_gets_the_smaller_token_budget_and_implementation_the_normal_one(tmp_path, cfg):
+    cfg.num_predict, cfg.num_predict_tests = 1500, 600
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert llm.kwargs[0]["num_predict"] == 600            # tests phase
+    assert llm.kwargs[1]["num_predict"] == 1500            # implementation phase
+
+
+def test_test_budget_never_exceeds_the_general_budget(tmp_path, cfg):
+    cfg.num_predict, cfg.num_predict_tests = 300, 900
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert llm.kwargs[0]["num_predict"] == 300
+
+
+def test_the_temperature_actually_used_is_recorded_with_the_saved_reply(tmp_path, cfg):
+    cfg.temperature = 0.2
+    llm = FakeLLM("garbage", TEST_CORE, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    r.run()
+    names = sorted(p.name for p in (ws.root / ".codeagent" / "replies").iterdir())
+    second = (ws.root / ".codeagent" / "replies" / names[1]).read_text()
+    assert "attempt: 2" in second and "temperature: 0.2" not in second
