@@ -102,3 +102,23 @@ def test_ctrl_c_style_sigterm_stops_cleanly(tmp_path, stub, env, cfgfile):
     out, err = proc.communicate(timeout=20)
     assert proc.returncode in (130, 3), (proc.returncode, out, err)
     assert not (tmp_path / "proj" / "slugify").exists()
+
+
+def test_one_ctrl_c_stops_an_agent_that_is_waiting_for_resources(tmp_path, env):
+    """Regression: a single signal used to be ignored while waiting for RAM/heat to recover."""
+    import signal
+
+    cfg = tmp_path / "blocked.toml"
+    cfg.write_text("min_free_mem_mb = 1000000\nresource_wait_s = 600\n")    # can never be satisfied
+    plan = tmp_path / "plan.toml"
+    plan.write_text(plan_toml())
+    proc = subprocess.Popen([sys.executable, "-m", "codeagent", "run", str(plan), "--workspace",
+                             str(tmp_path / "proj"), "--config", str(cfg)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    time.sleep(2.5)                                   # now sitting in the resource wait
+    started = time.time()
+    proc.send_signal(signal.SIGTERM)                  # ONE signal
+    out, err = proc.communicate(timeout=15)
+    assert time.time() - started < 8, "agent ignored the stop request while waiting"
+    assert proc.returncode == 3, (proc.returncode, out, err)
+    assert "PAUSED" in out and "stop requested" in out

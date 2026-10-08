@@ -85,10 +85,14 @@ class ResourceGuard:
 
     def wait_until_ok(self, *, sleep: Callable[[float], None] = time.sleep,
                       now: Callable[[], float] = time.monotonic,
-                      on_wait: Callable[[list[str]], None] | None = None) -> bool:
-        """Block until resources are fine. False if they stayed bad past resource_wait_s."""
+                      on_wait: Callable[[list[str]], None] | None = None,
+                      should_stop: Callable[[], bool] | None = None) -> bool:
+        """Block until resources are fine. False if they stayed bad past resource_wait_s,
+        or if a stop was requested (checked every second, so Ctrl+C is never ignored)."""
         deadline = now() + self.cfg.resource_wait_s
         while True:
+            if should_stop and should_stop():
+                return False
             reasons = self.problems()
             if not reasons:
                 return True
@@ -96,4 +100,7 @@ class ResourceGuard:
                 on_wait(reasons)
             if now() >= deadline:
                 return False
-            sleep(POLL_SECONDS)
+            for _ in range(int(POLL_SECONDS)):          # sleep in 1s slices
+                if should_stop and should_stop():
+                    return False
+                sleep(1.0)

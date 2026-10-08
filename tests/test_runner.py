@@ -324,3 +324,22 @@ def test_report_summary_is_readable(tmp_path, cfg):
     report = make_runner(tmp_path, llm, cfg)[0].run()
     s = report.summary()
     assert "Slugify utility" in s and "core function" in s and "done" in s.lower()
+
+
+# ----------------------------------------------------------------- stop while waiting / wrong files
+
+def test_stop_request_during_a_resource_wait_pauses_promptly(tmp_path, cfg):
+    stop = {"flag": False}
+
+    class WaitingGuard:
+        def wait_until_ok(self, *, should_stop=None, **kw):
+            stop["flag"] = True                    # user presses Ctrl+C while we wait
+            assert should_stop is not None and should_stop() is True
+            return False                           # guard gives up because of the stop
+
+    llm = FakeLLM()
+    r, ws = make_runner(tmp_path, llm, cfg, guard=WaitingGuard(), stop=lambda: stop["flag"])
+    report = r.run()
+    assert report.outcome == "paused"
+    assert "stop requested" in report.results[0].reason
+    assert llm.calls == []

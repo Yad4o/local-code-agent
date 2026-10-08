@@ -184,7 +184,11 @@ class Runner:
     def _ask(self, messages: list[dict]) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
-        if not self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r))):
+        ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
+                                      should_stop=self.should_stop)
+        if not ok:
+            if self.should_stop():
+                raise _Pause("stop requested")
             raise _Pause("system resources stayed too low; will retry later")
         try:
             self.attempts += 1

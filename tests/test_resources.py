@@ -143,3 +143,19 @@ def test_wait_gives_up_after_the_limit(tmp_path):
     g = make(tmp_path, mem_kb=100_000, resource_wait_s=60)
     assert g.wait_until_ok(sleep=c.sleep, now=c.now) is False
     assert 60 <= c.t <= 70
+
+
+# --- stop requests are honoured while waiting -----------------------------------
+
+def test_wait_stops_immediately_when_a_stop_is_requested(tmp_path):
+    c = Clock()
+    g = make(tmp_path, mem_kb=100_000, resource_wait_s=600)
+    assert g.wait_until_ok(sleep=c.sleep, now=c.now, should_stop=lambda: True) is False
+    assert c.t == 0
+
+
+def test_wait_notices_a_stop_requested_mid_wait_within_a_second_or_two(tmp_path):
+    c = Clock()
+    g = make(tmp_path, mem_kb=100_000, resource_wait_s=600)
+    assert g.wait_until_ok(sleep=c.sleep, now=c.now, should_stop=lambda: c.t >= 2) is False
+    assert c.t <= 3                                  # not the whole 600s (or even a whole 5s poll)
