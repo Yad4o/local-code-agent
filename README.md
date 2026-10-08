@@ -66,6 +66,27 @@ tests = ["tests/test_core.py"]                    # written FIRST
 files = ["slugify/__init__.py", "slugify/core.py"]  # the only implementation files it may write
 ```
 
+**Let the plan decide what is correct (recommended for small models).** A tiny model that also writes
+the tests invents contradictory ones. Give the step a `function` and `[[step.examples]]` instead and the
+agent prints the test file itself, so the model only writes the implementation
+(see `examples/cart.toml`):
+
+```toml
+function = "cart.engine:add_item"        # package.module:name (module file must be in `files`)
+
+[[step.examples]]
+args = [[], "apple", 1.5]
+expect = [{ name = "apple", price = 1.5, quantity = 1 }]
+
+[[step.examples]]
+args = [[], "apple", -1.0]
+raises = "ValueError"
+```
+
+Values must be plain TOML (strings, numbers, booleans, lists, tables). Floats are compared exactly.
+The agent also checks, with code rather than prompts, that the implementation really defines `function`.
+Model-written tests are still linted for duplicate test names and parameters nothing provides.
+
 Tips for a tiny model: **one function per step**, exact input -> output examples,
 and name the exact import the tests must use. The agent works on a branch
 `agent/<plan-title>`, never on your `main`.

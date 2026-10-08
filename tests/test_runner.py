@@ -544,3 +544,81 @@ def test_system_prompt_forbids_comments_and_docstrings_and_tests_must_take_no_pa
     make_runner(tmp_path, llm, cfg)[0].run()
     assert "No comments and no docstrings" in llm.calls[0][0]["content"]
     assert "NO parameters" in llm.calls[0][1]["content"]
+
+
+# ----------------------------------------------------------------- the plan's examples become the tests
+
+EXAMPLES_PLAN = '''
+title = "Slugify utility"
+test_command = "python -m pytest -q"
+
+[[step]]
+title = "core function"
+description = "Create slugify(text) in slugify/core.py."
+commit = "feat: add slugify core function"
+tests = ["tests/test_core.py"]
+files = ["slugify/__init__.py", "slugify/core.py"]
+function = "slugify.core:slugify"
+
+[[step.examples]]
+args = ["Hello, World!"]
+expect = "hello-world"
+
+[[step.examples]]
+args = ["  A  B "]
+expect = "a-b"
+
+[[step.examples]]
+args = [""]
+expect = ""
+'''
+
+
+def make_examples_runner(tmp_path, llm, cfg, log=None):
+    plan = parse_plan(EXAMPLES_PLAN)
+    ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
+    return Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=log or (lambda m: None),
+                  sleep=lambda s: None, should_stop=lambda: False), ws
+
+
+def test_examples_are_turned_into_tests_without_asking_the_model(tmp_path, cfg):
+    llm = FakeLLM(INIT + CORE_OK)
+    lines = []
+    r, ws = make_examples_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 1                                  # only the implementation was generated
+    tests = ws.read("tests/test_core.py")
+    assert "from slugify.core import slugify" in tests and "== 'hello-world'" in tests
+    assert any("generated from 3 example(s)" in l for l in lines)
+
+
+def test_model_never_sees_a_request_to_write_tests_when_examples_exist(tmp_path, cfg):
+    llm = FakeLLM(INIT + CORE_OK)
+    make_examples_runner(tmp_path, llm, cfg)[0].run()
+    assert "def slugify(...)" in llm.calls[0][1]["content"]
+    assert "Do NOT change the tests" in llm.calls[0][1]["content"]
+
+
+def test_wrong_implementation_is_retried_against_the_same_generated_tests(tmp_path, cfg):
+    llm = FakeLLM(INIT + CORE_BAD, INIT + CORE_OK)
+    r, ws = make_examples_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 2
+    assert "failed" in llm.calls[1][1]["content"]               # the real pytest output goes back to the model
+
+
+def test_implementation_that_does_not_define_the_function_is_sent_back_before_running(tmp_path, cfg):
+    wrong = block("slugify/core.py", "def make_slug(t):\n    return t\n")
+    llm = FakeLLM(INIT + wrong, INIT + CORE_OK)
+    r, ws = make_examples_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "does not define `slugify`" in llm.calls[1][1]["content"]
+
+
+def test_step_whose_implementation_already_passes_the_examples_is_skipped(tmp_path, cfg):
+    llm = FakeLLM()
+    r, ws = make_examples_runner(tmp_path, llm, cfg)
+    ws.write("slugify/__init__.py", "")
+    ws.write("slugify/core.py", "import re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n")
+    r.run()                                                     # already implemented: nothing to do
+    assert llm.calls == []

@@ -23,3 +23,15 @@ commit = "feat: add slugify core function"                   # required, one lin
 tests = ["tests/test_core.py"]                               # required: written FIRST (TDD)
 files = ["slugify/__init__.py", "slugify/core.py"]           # required: implementation files
 # context = ["README.md"]                                    # optional: existing files to show the model
+
+# BEST for a small model: let YOU decide what is correct instead of the model. Add `function` and
+# `[[step.examples]]`; the agent then prints the test file from them (the model never writes tests)
+# and the model only writes the implementation. `tests` must then list exactly one file.
+#
+# function = "slugify.core:slugify"           # package.module:name; slugify/core.py must be in `files`
+# [[step.examples]]
+# args = ["Hello, World!"]
+# expect = "hello-world"
+# [[step.examples]]
+# args = [123]
+# raises = "TypeError"                        # a builtin exception name; use `kwargs = { x = 1 }` for keyword args

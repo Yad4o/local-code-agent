@@ -81,3 +81,13 @@ def test_a_missing_module_is_the_expected_red_not_a_broken_test():
 
 def test_a_real_assertion_failure_is_not_diagnosed_as_broken():
     assert diagnose_broken_tests("E   assert '' == 'hello-world'\n1 failed in 0.02s") is None
+
+
+def test_duplicate_test_names_are_rejected():
+    src = "def test_a():\n    assert 1\n\ndef test_a():\n    assert 2\n"
+    assert "defined twice" in check_test_source(src)[0]
+
+
+def test_same_name_in_different_classes_is_fine():
+    src = "class A:\n    def test_x(self):\n        assert 1\n\nclass B:\n    def test_x(self):\n        assert 1\n"
+    assert check_test_source(src) == []

@@ -22,6 +22,7 @@ from codeagent.prompts import build_impl_prompt, build_tests_prompt
 from codeagent.replylog import ReplyLog
 from codeagent.resources import ResourceGuard
 from codeagent.shell import CommandResult, run_command
+from codeagent.spec_tests import defined_names, render_tests
 from codeagent.state import RunState, WorkspaceLock
 from codeagent.testcheck import check_test_source, diagnose_broken_tests
 from codeagent.workspace import Workspace, WorkspaceError
@@ -133,6 +134,8 @@ class Runner:
                     self._impl_phase(step, tests, output)
                     break
                 except _TestsBroken as broken:
+                    if step.examples:                       # generated from the plan: rewriting cannot help
+                        raise _Fail(f"the tests generated from the plan's examples cannot run: {broken}") from broken
                     if rewrite == self.cfg.max_test_rewrites:
                         raise _Fail(f"the tests are broken and rewriting them did not help: {broken}") from broken
                     self.log(f"   the tests cannot run ({broken}); rewriting the tests")
@@ -149,7 +152,23 @@ class Runner:
             self.ws.restore(snapshot)
             return StepResult(step.title, "failed", self.attempts, reason=str(e))
 
+    def _spec_tests_phase(self, step: Step):
+        """The plan's examples ARE the tests: printed by the harness, never written by the model."""
+        files = {step.tests[0]: render_tests(step)}
+        self.log(f"   tests generated from {len(step.examples)} example(s) in the plan (no model call)")
+        self._write(files)
+        res = self._run_tests()
+        if res.timed_out or res.flooded:
+            raise _Fail("the tests generated from the plan's examples hung or printed endlessly; check the examples")
+        if res.ok:
+            if all(self.ws.exists(f) for f in step.files):
+                return files, True, res.output
+            raise _Fail("the plan's examples already pass with no implementation; check the examples")
+        return files, False, res.output
+
     def _tests_phase(self, step: Step, feedback: str | None = None):
+        if step.examples:
+            return self._spec_tests_phase(step)
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step.context))
             text = self._ask(build_tests_prompt(self.plan, step, existing, self.cfg.max_context_chars, feedback),
@@ -191,6 +210,7 @@ class Runner:
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict)
             files, problems = self._collect(text, step.files)
+            problems += self._lint_impl(step, files)
             if problems:
                 feedback = _bullets(problems)
                 self.log(f"   impl attempt {n}: {problems[0]}")
@@ -215,6 +235,16 @@ class Runner:
         the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
         ceiling = max(self.cfg.temperature, self.cfg.max_retry_temperature)
         return min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+
+    def _lint_impl(self, step: Step, files: dict[str, str]) -> list[str]:
+        """A tool, not a prompt: the function the examples call must really be defined."""
+        if not step.function:
+            return []
+        module, name = step.function.split(":")
+        path = module.replace(".", "/") + ".py"
+        if path in files and name not in defined_names(files[path]):
+            return [f"{path} does not define `{name}`; write `def {name}(...)` at the top level of {path}"]
+        return []
 
     def _lint_tests(self, files: dict[str, str]) -> list[str]:
         fixtures = set()

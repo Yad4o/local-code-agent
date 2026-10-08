@@ -69,6 +69,10 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         "These tests must pass. Do NOT change the tests:\n" + _fit(dict(tests), budget // 2),
         f"Write the implementation file(s): {', '.join(step.files)}",
     ]
+    if step.function:
+        module, name = step.function.split(":")
+        parts.append(f"The tests call `{name}` imported from {module}: define exactly `def {name}(...)` "
+                     f"at the top level of {module.replace('.', '/')}.py.")
     cur = {p: existing.get(p) for p in (*step.files, *step.context)}
     if any(v is not None for v in cur.values()):
         parts.append("Current content of the files:\n" + _fit(cur, budget // 2))
