@@ -19,6 +19,7 @@ from codeagent.llm import LLMClient, LLMError
 from codeagent.parsing import parse_file_blocks
 from codeagent.plan import Plan, PlanError, Step, plan_slug
 from codeagent.prompts import build_impl_prompt, build_tests_prompt
+from codeagent.replylog import ReplyLog
 from codeagent.resources import ResourceGuard
 from codeagent.shell import CommandResult, run_command
 from codeagent.state import RunState, WorkspaceLock
@@ -84,6 +85,7 @@ class Runner:
         self.sleep = sleep
         self.should_stop = should_stop
         self.attempts = 0
+        self.replies = ReplyLog(ws.root)
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunReport:
@@ -136,7 +138,8 @@ class Runner:
         feedback = None
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step.context))
-            text = self._ask(build_tests_prompt(self.plan, step, existing, self.cfg.max_context_chars, feedback))
+            text = self._ask(build_tests_prompt(self.plan, step, existing, self.cfg.max_context_chars, feedback),
+                             step=step, phase="tests", attempt=n)
             files, problems = self._collect(text, step.tests)
             if problems:
                 feedback = _bullets(problems)
@@ -163,7 +166,8 @@ class Runner:
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step.context))
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
-                                               self.cfg.max_context_chars, output, feedback))
+                                               self.cfg.max_context_chars, output, feedback),
+                             step=step, phase="impl", attempt=n)
             files, problems = self._collect(text, step.files)
             if problems:
                 feedback = _bullets(problems)
@@ -181,7 +185,7 @@ class Runner:
         raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
 
     # ------------------------------------------------------------------ pieces
-    def _ask(self, messages: list[dict]) -> str:
+    def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
         ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
@@ -190,11 +194,18 @@ class Runner:
             if self.should_stop():
                 raise _Pause("stop requested")
             raise _Pause("system resources stayed too low; will retry later")
+        started = time.monotonic()
         try:
             self.attempts += 1
             text = self.llm.chat(messages)
         except LLMError as e:
             raise _Pause(f"model unavailable: {e}") from e
+        seconds = time.monotonic() - started
+        truncated = bool(getattr(text, "truncated", False))
+        self.replies.save(step.title, phase, attempt, str(text), seconds=seconds, truncated=truncated,
+                          temperature=self.cfg.temperature)
+        self.log(f"   model replied in {seconds:.0f}s ({len(text)} chars)"
+                 + (" - CUT OFF at the token limit" if truncated else ""))
         self.sleep(self.cfg.step_cooldown_s)              # let the laptop breathe
         return text
 

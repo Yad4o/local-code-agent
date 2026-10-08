@@ -93,10 +93,10 @@ def cfg():
     return Config(step_cooldown_s=0, max_attempts=3, test_timeout=60)
 
 
-def make_runner(tmp_path, llm, cfg, *, two=False, guard=None, sleep=None, stop=None, **plan_kw):
+def make_runner(tmp_path, llm, cfg, *, two=False, guard=None, sleep=None, stop=None, log=None, **plan_kw):
     plan = parse_plan(plan_text(two=two, **plan_kw))
     ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
-    return Runner(cfg, plan, ws, llm, guard=guard or FakeGuard(), log=lambda m: None,
+    return Runner(cfg, plan, ws, llm, guard=guard or FakeGuard(), log=log or (lambda m: None),
                   sleep=sleep or (lambda s: None), should_stop=stop or (lambda: False)), ws
 
 
@@ -353,3 +353,26 @@ def test_model_that_writes_the_wrong_files_is_told_exactly_which_to_write(tmp_pa
     feedback = llm.calls[1][1]["content"]
     assert "slugify/core.py" in feedback and "does not allow" in feedback
     assert "ONLY" in feedback and "tests/test_core.py" in feedback
+
+
+# ----------------------------------------------------------------- reply log + timing
+
+def test_every_raw_reply_is_kept_on_disk_and_timing_is_logged(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    lines = []
+    r, ws = make_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    d = ws.root / ".codeagent" / "replies"
+    names = sorted(p.name for p in d.iterdir())
+    assert len(names) == 2
+    assert "tests" in names[0] and "impl" in names[1]
+    assert "from slugify.core import slugify" in (d / names[0]).read_text()
+    assert any("model replied" in l and "s" in l for l in lines)
+
+
+def test_replies_are_never_committed_to_the_project(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    r.run()
+    tracked = subprocess.run(["git", "ls-files"], cwd=ws.root, capture_output=True, text=True).stdout
+    assert ".codeagent" not in tracked
