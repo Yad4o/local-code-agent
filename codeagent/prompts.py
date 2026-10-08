@@ -18,6 +18,7 @@ Rules:
 - Always write the COMPLETE file, never a diff or a snippet.
 - Write only the files you are asked to write, with exactly those paths.
 - No explanations, no text outside the file blocks.
+- No comments and no docstrings: write only the code, as short as possible.
 - An empty file is a block with nothing inside the fence."""
 
 
@@ -46,6 +47,8 @@ def build_tests_prompt(plan: Plan, step: Step, existing: dict[str, str | None], 
         "Write the TEST file(s) first (test-driven development).",
         "The tests must FAIL until the feature is implemented, so test the real behaviour with "
         "concrete examples and assert exact results.",
+        "Every test is a plain function with NO parameters and the input written inside it, like: "
+        "def test_lower():\n    assert f('A') == 'a'. Write 3 to 6 short tests, no fixtures, no loops.",
         f"Test file(s) to write: {', '.join(step.tests)}",
         f"The code under test will be written later in: {', '.join(step.files)}",
     ]

@@ -457,4 +457,90 @@ def test_the_temperature_actually_used_is_recorded_with_the_saved_reply(tmp_path
     r.run()
     names = sorted(p.name for p in (ws.root / ".codeagent" / "replies").iterdir())
     second = (ws.root / ".codeagent" / "replies" / names[1]).read_text()
-    assert "attempt: 2" in second and "temperature: 0.2" not in second
+    assert "attempt: 2" in second and "temperature: 0.25" in second
+
+
+# ----------------------------------------------------------------- broken tests are sent back to the test phase
+
+TEST_PARAMS = block("tests/test_core.py",
+                    "from slugify.core import slugify\n\n"
+                    "def test_basic(text: str) -> None:\n    assert slugify(text) == 'hello-world'\n")
+TEST_FIXTURE_MISSING = block("tests/test_core.py",
+                             "import pytest\n\n@pytest.fixture\ndef a(missing):\n    return 1\n\n"
+                             "def test_x(a):\n    assert a == 2\n")
+TEST_FIXTURE_MISSING_LATE = block("tests/test_core.py",
+                                  "import pytest\nfrom slugify.core import slugify\n\n"
+                                  "@pytest.fixture\ndef a(missing):\n    return 1\n\n"
+                                  "def test_x(a):\n    assert slugify('A') == 'a'\n")
+
+
+def test_tests_with_parameters_nothing_provides_are_rejected_before_running(tmp_path, cfg):
+    llm = FakeLLM(TEST_PARAMS, TEST_CORE, INIT + CORE_OK)
+    lines = []
+    report = make_runner(tmp_path, llm, cfg, log=lines.append)[0].run()
+    assert report.outcome == "done"
+    assert len(llm.calls) == 3                            # no implementation call wasted on bad tests
+    assert "NO parameters" in llm.calls[1][1]["content"]
+    assert any("tests attempt 1" in l and "text" in l for l in lines)
+
+
+def test_tests_that_are_red_because_pytest_cannot_run_them_are_rewritten(tmp_path, cfg):
+    llm = FakeLLM(TEST_FIXTURE_MISSING, TEST_CORE, INIT + CORE_OK)
+    report = make_runner(tmp_path, llm, cfg)[0].run()
+    assert report.outcome == "done"
+    assert len(llm.calls) == 3
+    assert "fixture 'missing'" in llm.calls[1][1]["content"]
+
+
+def test_tests_found_broken_while_implementing_are_rewritten_not_retried(tmp_path, cfg):
+    llm = FakeLLM(TEST_FIXTURE_MISSING_LATE, INIT + CORE_OK, TEST_CORE, INIT + CORE_OK)
+    lines = []
+    r, ws = make_runner(tmp_path, llm, cfg, log=lines.append)
+    report = r.run()
+    assert report.outcome == "done"
+    assert len(llm.calls) == 4                            # one impl try, not max_attempts of them
+    assert "fixture 'missing'" in llm.calls[2][1]["content"]
+    assert ws.read("tests/test_core.py").startswith("from slugify.core")
+    assert any("rewriting the tests" in l for l in lines)
+
+
+def test_tests_that_stay_broken_fail_the_step_and_roll_back(tmp_path, cfg):
+    cfg.max_test_rewrites = 1
+    llm = FakeLLM(*[TEST_FIXTURE_MISSING_LATE, INIT + CORE_OK] * 2)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    report = r.run()
+    assert report.outcome == "failed"
+    assert "tests are broken" in report.results[0].reason
+    assert not ws.exists("slugify/core.py") and not ws.exists("tests/test_core.py")
+
+
+def test_zero_test_rewrites_fails_immediately(tmp_path, cfg):
+    cfg.max_test_rewrites = 0
+    llm = FakeLLM(TEST_FIXTURE_MISSING_LATE, INIT + CORE_OK)
+    assert make_runner(tmp_path, llm, cfg)[0].run().outcome == "failed"
+    assert len(llm.calls) == 2
+
+
+# ----------------------------------------------------------------- retries stay calm
+
+def test_default_retries_never_run_hot(tmp_path):
+    cfg = Config(step_cooldown_s=0, max_attempts=12, test_timeout=60)
+    llm = FakeLLM(*["nope"] * 12)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    temps = [k["temperature"] for k in llm.kwargs]
+    assert temps[0] == 0.2 and max(temps) <= 0.4
+
+
+def test_retry_temperature_step_and_cap_are_configurable(tmp_path):
+    cfg = Config(step_cooldown_s=0, max_attempts=5, temperature=0.1, retry_temperature_step=0.1,
+                 max_retry_temperature=0.25, test_timeout=60)
+    llm = FakeLLM(*["nope"] * 5)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert [round(k["temperature"], 2) for k in llm.kwargs] == [0.1, 0.2, 0.25, 0.25, 0.25]
+
+
+def test_system_prompt_forbids_comments_and_docstrings_and_tests_must_take_no_parameters(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert "No comments and no docstrings" in llm.calls[0][0]["content"]
+    assert "NO parameters" in llm.calls[0][1]["content"]

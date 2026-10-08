@@ -90,3 +90,16 @@ def test_env_overrides_model_and_base_url(tmp_path, monkeypatch):
 def test_test_writing_budget_is_smaller_than_the_general_budget():
     c = Config()
     assert 16 <= c.num_predict_tests <= c.num_predict
+
+
+def test_retries_are_calm_and_replies_capped_by_default():
+    c = Config()
+    assert c.retry_temperature_step <= 0.1 and c.max_retry_temperature <= 0.5
+    assert c.num_predict <= 1024 and c.max_test_rewrites >= 1
+
+
+def test_new_retry_keys_are_validated(tmp_path):
+    f = tmp_path / "c.toml"
+    f.write_text("max_retry_temperature = 5.0\n")
+    with pytest.raises(ConfigError):
+        load_config(f)
