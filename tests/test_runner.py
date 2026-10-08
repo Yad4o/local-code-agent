@@ -622,3 +622,113 @@ def test_step_whose_implementation_already_passes_the_examples_is_skipped(tmp_pa
     ws.write("slugify/core.py", "import re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n")
     r.run()                                                     # already implemented: nothing to do
     assert llm.calls == []
+
+
+# ----------------------------------------------------------------- skeleton mode and tidy tools
+
+import shutil as _shutil
+
+from codeagent.skeleton import BODY_STOP
+
+BODY_PLAN = EXAMPLES_PLAN.replace('function = "slugify.core:slugify"',
+                                  'function = "slugify.core:slugify"\nsignature = "slugify(text)"')
+BODY_OK = block("slugify/core.py", "import re\nreturn re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')")
+BODY_BAD = block("slugify/core.py", "return text")
+needs_ruff = pytest.mark.skipif(_shutil.which("ruff") is None, reason="ruff not installed")
+
+
+def make_body_runner(tmp_path, llm, cfg, log=None):
+    plan = parse_plan(BODY_PLAN)
+    ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
+    return Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=log or (lambda m: None),
+                  sleep=lambda s: None, should_stop=lambda: False), ws
+
+
+def test_skeleton_mode_model_writes_only_the_body(tmp_path, cfg):
+    llm = FakeLLM(BODY_OK)
+    r, ws = make_body_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 1
+    assert llm.kwargs[0]["stop"] == BODY_STOP and llm.kwargs[0]["num_predict"] == cfg.num_predict_body
+    assert "def slugify(text):" in llm.calls[0][1]["content"] and "Write ONLY its body" in llm.calls[0][1]["content"]
+    assert "def slugify(text):" in ws.read("slugify/core.py")
+    assert ws.read("slugify/__init__.py") == "from .core import slugify\n"
+
+
+def test_skeleton_mode_wrong_body_is_retried_with_the_test_output(tmp_path, cfg):
+    llm = FakeLLM(BODY_BAD, BODY_OK)
+    r, ws = make_body_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "failed" in llm.calls[1][1]["content"]
+
+
+def test_skeleton_mode_invalid_body_is_sent_back_before_running(tmp_path, cfg):
+    llm = FakeLLM(block("slugify/core.py", "return ("), BODY_OK)
+    lines = []
+    r, ws = make_body_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert "not valid Python" in llm.calls[1][1]["content"]
+
+
+def test_stop_sequences_are_not_sent_outside_skeleton_mode(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
+    make_runner(tmp_path, llm, cfg)[0].run()
+    assert all("stop" not in kw for kw in llm.kwargs)
+
+
+CORE_CHATTY = block("slugify/core.py",
+                    '"""Slugify module."""\nimport re\n\n\ndef slugify(t):\n    """Make a slug."""\n'
+                    "    # lowercase and dash\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')  # done\n")
+
+
+def test_docstrings_and_comments_from_the_model_never_reach_the_files(tmp_path, cfg):
+    llm = FakeLLM(TEST_CORE, INIT + CORE_CHATTY)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    code = ws.read("slugify/core.py")
+    assert "#" not in code and '"""' not in code and "Make a slug" not in code
+
+
+def test_tidy_can_be_switched_off(tmp_path, cfg):
+    cfg.tidy_code = False
+    llm = FakeLLM(TEST_CORE, INIT + CORE_CHATTY)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "Make a slug" in ws.read("slugify/core.py")
+
+
+@needs_ruff
+def test_undefined_names_are_caught_by_ruff_before_pytest_runs(tmp_path, cfg):
+    undefined = block("slugify/core.py", "def slugify(t):\n    return missing_helper(t)\n")
+    llm = FakeLLM(TEST_CORE, INIT + undefined, INIT + CORE_OK)
+    lines = []
+    r, ws = make_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert any("static check" in l and "F821" in l for l in lines)
+    assert "F821" in llm.calls[2][1]["content"]
+
+
+@needs_ruff
+def test_unused_imports_are_removed_by_ruff(tmp_path, cfg):
+    sloppy = block("slugify/core.py", "import os\nimport re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n")
+    llm = FakeLLM(TEST_CORE, INIT + sloppy)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "import os" not in ws.read("slugify/core.py")
+
+
+def test_ruff_can_be_switched_off(tmp_path, cfg):
+    cfg.use_ruff = False
+    sloppy = block("slugify/core.py", "import os\nimport re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n")
+    llm = FakeLLM(TEST_CORE, INIT + sloppy)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "import os" in ws.read("slugify/core.py")
+
+
+def test_skeleton_mode_accepts_an_indented_body_and_a_body_with_blank_lines(tmp_path, cfg):
+    indented = block("slugify/core.py", "    import re\n\n    out = re.sub(r'[^a-z0-9]+', '-', text.lower())\n    return out.strip('-')")
+    llm = FakeLLM(indented)
+    r, ws = make_body_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 1

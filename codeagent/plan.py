@@ -10,7 +10,7 @@ from importlib import resources
 from pathlib import Path, PurePosixPath
 
 TOP_KEYS = {"title", "test_command", "workspace", "step"}
-STEP_KEYS = {"title", "description", "commit", "tests", "files", "context", "function", "examples"}
+STEP_KEYS = {"title", "description", "commit", "tests", "files", "context", "function", "examples", "signature"}
 EXAMPLE_KEYS = {"args", "kwargs", "expect", "raises"}
 FUNCTION_RE = re.compile(r"^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*):([A-Za-z_]\w*)$")
 FORBIDDEN_ROOTS = {".git", ".codeagent"}
@@ -42,6 +42,7 @@ class Step:
     context: tuple[str, ...] = ()
     function: str | None = None         # "package.module:name": the function the examples call
     examples: tuple[Example, ...] = ()
+    signature: str | None = None        # "name(a, b=1)": the harness writes the def line, the model only the body
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,35 @@ def _parse_examples(rs: dict, where: str, tests: tuple[str, ...], files: tuple[s
     return (function, tuple(out)) if ok else (None, ())
 
 
+def _parse_signature(rs: dict, where: str, function: str | None, files: tuple[str, ...],
+                     errors: list[str]) -> str | None:
+    sig = rs.get("signature")
+    if sig is None:
+        return None
+    if not isinstance(sig, str) or not sig.strip():
+        errors.append(f"{where}: 'signature' must be a non-empty string like \"add_item(cart, name, price=1)\"")
+        return None
+    if not function:
+        errors.append(f"{where}: 'signature' needs 'function' and 'examples' (the tests it must satisfy)")
+        return None
+    from codeagent.skeleton import signature_problem          # local import: skeleton imports this module
+    module, name = function.split(":")
+    problem = signature_problem(sig.strip(), name)
+    if problem:
+        errors.append(f"{where}: 'signature' {problem}")
+        return None
+    mod_file = module.replace(".", "/") + ".py"
+    allowed = {mod_file}
+    parts = module.split(".")[:-1]
+    allowed |= {"/".join(parts[:i]) + "/__init__.py" for i in range(1, len(parts) + 1)}
+    stray = [f for f in files if f not in allowed]
+    if stray:
+        errors.append(f"{where}: with 'signature', 'files' may only be the module file and its package "
+                      f"__init__.py files; remove: {', '.join(stray)}")
+        return None
+    return sig.strip()
+
+
 def parse_plan(text: str) -> Plan:
     try:
         data = tomllib.loads(text)
@@ -221,8 +251,9 @@ def parse_plan(text: str) -> Plan:
         if both:
             errors.append(f"{where}: path(s) listed in both 'tests' and 'files': {', '.join(sorted(both))}")
         function, examples = _parse_examples(rs, where, tests, files, errors)
+        signature = _parse_signature(rs, where, function, files, errors)
         if st and desc and commit:
-            steps.append(Step(st, desc, commit, tests, files, context, function, examples))
+            steps.append(Step(st, desc, commit, tests, files, context, function, examples, signature))
 
     if errors:
         raise PlanError(errors)

@@ -185,3 +185,19 @@ every implementation the same way. The agent therefore:
 Prompts also tell the model to write no comments or docstrings and to write parameterless tests.
 If `smoke` passes but steps still fail on logic, try a stronger model that fits your GPU
 (for example a 1.5B coder model such as `qwen2.5-coder:1.5b`).
+
+## Tools around the model
+
+The model is a fast typist that guesses; code does the checking and the tidying.
+
+| Tool | What it does | Switch |
+|---|---|---|
+| Examples as tests | the plan's `[[step.examples]]` become the pytest file; the model never writes tests | `function` + `examples` in the plan |
+| Skeleton mode | the plan's `signature` gives the def line; the harness writes it and `__init__.py`, the model writes only the body (cap `num_predict_body`, default 384 tokens) | `signature` in the plan |
+| Tidy | strips docstrings and comments and re-prints the code in one style (stdlib `ast`) | `tidy_code` (default on) |
+| ruff (optional, `pip install ruff`) | removes unused imports, reports undefined names / redefinitions / syntax errors with line numbers before pytest runs | `use_ruff` (default on, skipped when ruff is missing) |
+| Function-defined check | the implementation must really define the function the examples call | automatic |
+| Duplicate / parameter checks | model-written tests with repeated names or parameters nothing provides are rejected | automatic |
+| Repeat penalty + stop sequence | `repeat_penalty` (Ollama) fights "same sentence forever" loops; skeleton mode stops at a stray `FILE:` | `repeat_penalty`, config |
+
+See `examples/cart.toml` for a step using all of it.
