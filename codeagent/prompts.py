@@ -54,6 +54,8 @@ def build_tests_prompt(plan: Plan, step: Step, existing: dict[str, str | None], 
         parts.append("Existing files for reference (read-only):\n" + _fit(ref, budget))
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
+    parts.append(f"Reply with ONLY the file block(s) for: {', '.join(step.tests)}. "
+                 f"Do NOT write {', '.join(step.files)} now: the implementation comes later.")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
@@ -71,4 +73,6 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         parts.append("Result of running the tests (fix what fails):\n" + test_output.strip())
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
+    parts.append(f"Reply with ONLY the file block(s) for: {', '.join(step.files)}. "
+                 f"Do NOT write or change {', '.join(step.tests)}: the tests are already final.")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]

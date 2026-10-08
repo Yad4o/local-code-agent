@@ -89,3 +89,15 @@ def test_budget_is_shared_between_files():
 def test_prompts_never_mention_step_numbers_or_internal_ids():
     t = text(build_tests_prompt(PLAN, STEP, {}, 6000, None)).lower()
     assert "task 1" not in t and "step 1" not in t
+
+
+def test_tests_prompt_ends_with_a_hard_instruction_about_which_files_to_write():
+    tail = text(build_tests_prompt(PLAN, STEP, {}, 6000, "some feedback"))[-350:].lower()
+    assert "only" in tail and "tests/test_core.py" in tail
+    assert "do not write" in tail and "slugify/core.py" in tail
+
+
+def test_impl_prompt_ends_with_a_hard_instruction_about_which_files_to_write():
+    tail = text(build_impl_prompt(PLAN, STEP, {"tests/test_core.py": "x\n"}, {}, 6000, "out", "fb"))[-350:].lower()
+    assert "only" in tail and "slugify/core.py" in tail
+    assert "do not" in tail and "tests/test_core.py" in tail

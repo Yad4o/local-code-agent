@@ -217,6 +217,9 @@ class Runner:
                     got[path] = ""                          # trivial file: create it for the model
                 continue
             problems.append(f"missing file: {path} (write every requested file, complete)")
+        if ignored and problems:
+            problems.insert(0, f"you wrote {', '.join(ignored)}, which this step does not allow. "
+                               f"Write ONLY: {', '.join(allowed)}")
         for path, content in got.items():
             if len(content.encode("utf-8")) > self.cfg.max_file_bytes:
                 problems.append(f"{path}: file is too large")

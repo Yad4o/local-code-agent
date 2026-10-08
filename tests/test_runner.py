@@ -343,3 +343,13 @@ def test_stop_request_during_a_resource_wait_pauses_promptly(tmp_path, cfg):
     assert report.outcome == "paused"
     assert "stop requested" in report.results[0].reason
     assert llm.calls == []
+
+
+def test_model_that_writes_the_wrong_files_is_told_exactly_which_to_write(tmp_path, cfg):
+    wrong = INIT + CORE_OK                           # wrote the implementation instead of the tests
+    llm = FakeLLM(wrong, TEST_CORE, INIT + CORE_OK)
+    r, ws = make_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    feedback = llm.calls[1][1]["content"]
+    assert "slugify/core.py" in feedback and "does not allow" in feedback
+    assert "ONLY" in feedback and "tests/test_core.py" in feedback
