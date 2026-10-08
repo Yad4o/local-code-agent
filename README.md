@@ -84,6 +84,21 @@ Repeated model outages back off (up to 10 min) instead of spinning.
 To start it at boot and restart it after crashes, use the systemd user service in
 `deploy/codeagent.service` (instructions at the top of that file).
 
+## Watching it work / finding out why a step failed
+
+```bash
+W=~/agent-projects/demo                                   # your --workspace
+tail -f $W/.codeagent/agent.log                           # live log (also printed in the terminal)
+watch -n 2 "cd $W && git status --short && echo --- && git log --oneline | head"   # files + commits live
+ls $W/.codeagent/replies/                                 # EVERY raw model reply, newest last
+cat $W/.codeagent/replies/*-tests-a1.txt                  # header says: seconds, cut off yes/no, temperature
+```
+
+Each log line `model replied in 197s ... CUT OFF at the token limit` means the model rambled
+until it hit `num_predict`. The agent then keeps the longest valid-Python prefix of what it wrote
+(or asks for a SHORTER file), and every retry runs at a higher temperature so a small model
+cannot repeat the same loop. A reply that forgot its closing ``` is accepted.
+
 ## Safety and "don't crash my laptop"
 
 | Risk | Protection |
@@ -109,6 +124,7 @@ Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. Most useful keys:
 | `base_url` | `http://localhost:11434` | model server (env: `CODEAGENT_BASE_URL`) |
 | `backend` | `ollama` | or `openai` for llama.cpp's server |
 | `num_ctx` / `num_predict` | `4096` / `1536` | context / max reply tokens (smaller = less VRAM) |
+| `num_predict_tests` | `700` | smaller reply cap while writing tests (a rambling reply costs less time) |
 | `temperature` | `0.2` | try `0` if `smoke` is flaky |
 | `max_attempts` | `4` | retries per phase before a step is rolled back |
 | `stop_on_failure` | `true` | stop the plan at the first failed step |
