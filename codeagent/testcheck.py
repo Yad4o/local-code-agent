@@ -56,6 +56,14 @@ def check_test_source(source: str, known_fixtures: frozenset[str] | set[str] = f
     if not tests:
         return ["there is no test function; write functions named test_something()"]
     problems = []
+    for scope in [tree, *[n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]]:
+        seen: set[str] = set()
+        for f in scope.body:
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name.startswith("test"):
+                if f.name in seen:
+                    problems.append(f"{f.name}() is defined twice; the second silently replaces the first. "
+                                    f"Give every test its own name.")
+                seen.add(f.name)
     for f in tests:
         missing = [p for p in _required_params(f) if p not in available | _parametrized_names(f)]
         if missing:

@@ -144,3 +144,69 @@ def test_slug():
 def test_bundled_template_is_a_valid_plan():
     p = parse_plan(template_text())
     assert len(p.steps) >= 1
+
+
+# ----------------------------------------------------------------- function + examples
+
+EX = VALID + '''function = "slugify.core:slugify"
+
+[[step.examples]]
+args = ["Hello, World!"]
+expect = "hello-world"
+
+[[step.examples]]
+args = [123]
+raises = "TypeError"
+'''
+
+
+def test_function_and_examples_parse():
+    s = parse_plan(EX).steps[0]
+    assert s.function == "slugify.core:slugify"
+    assert len(s.examples) == 2
+    assert s.examples[0].args == ("Hello, World!",) and s.examples[0].expect == "hello-world"
+    assert s.examples[1].raises == "TypeError"
+
+
+def test_a_step_without_examples_is_unchanged():
+    s = parse_plan(VALID).steps[0]
+    assert s.function is None and s.examples == ()
+
+
+def test_function_and_examples_must_come_together():
+    assert any("go together" in e for e in errors_of(VALID + 'function = "slugify.core:slugify"\n'))
+    assert any("go together" in e for e in errors_of(VALID + '[[step.examples]]\nargs = ["a"]\nexpect = "a"\n'))
+
+
+def test_function_must_be_module_colon_name_and_its_file_listed():
+    bad = EX.replace('"slugify.core:slugify"', '"slugify"')
+    assert any("package.module:name" in e for e in errors_of(bad))
+    other = EX.replace('"slugify.core:slugify"', '"slugify.other:slugify"')
+    assert any("slugify/other.py must be listed" in e for e in errors_of(other))
+
+
+def test_examples_need_exactly_one_tests_file():
+    two = EX.replace('tests = ["tests/test_core.py"]', 'tests = ["tests/test_core.py", "tests/test_more.py"]')
+    assert any("exactly one path" in e for e in errors_of(two))
+
+
+def test_example_needs_exactly_one_of_expect_or_raises():
+    both = EX + 'expect = 1\n'
+    neither = VALID + 'function = "slugify.core:slugify"\n[[step.examples]]\nargs = ["a"]\n'
+    assert any("exactly one of" in e for e in errors_of(neither))
+    assert any("exactly one of" in e for e in errors_of(both))
+
+
+def test_raises_must_be_a_builtin_exception():
+    assert any("builtin exception" in e for e in errors_of(EX.replace('"TypeError"', '"print"')))
+    assert any("builtin exception" in e for e in errors_of(EX.replace('"TypeError"', '"Nope"')))
+
+
+def test_example_values_must_be_printable_python():
+    assert any("nan/inf" in e for e in errors_of(EX.replace('expect = "hello-world"', 'expect = nan')))
+    assert any("unsupported type" in e for e in errors_of(EX.replace('expect = "hello-world"', 'expect = 1979-05-27')))
+
+
+def test_unknown_example_key_and_bad_kwargs_are_reported():
+    assert any("unknown key 'result'" in e for e in errors_of(EX + 'result = 1\n'))
+    assert any("'kwargs'" in e for e in errors_of(EX.replace('args = [123]', 'args = [123]\nkwargs = { "a b" = 1 }')))
