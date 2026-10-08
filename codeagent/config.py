@@ -20,14 +20,17 @@ class Config:
     base_url: str = "http://localhost:11434"
     model: str = "qwen3.5:0.8b"                 # run `codeagent doctor` to list installed models
     num_ctx: int = 4096                         # context window; keep small for 2 GB VRAM
-    num_predict: int = 1536                     # max tokens generated per call
-    num_predict_tests: int = 700                # smaller cap while writing tests (a rambling reply costs less time)
+    num_predict: int = 1024                     # max tokens generated per call
+    num_predict_tests: int = 600                # smaller cap while writing tests (a rambling reply costs less time)
     temperature: float = 0.2
+    retry_temperature_step: float = 0.05        # each retry runs this much hotter (small models get worse when hot)
+    max_retry_temperature: float = 0.4          # retries never go hotter than this (or `temperature`, if higher)
     keep_alive: str = "30m"                     # keep model loaded between calls
     request_timeout: float = 300.0
     allow_remote_llm: bool = False              # False = refuse any non-local base_url (offline guarantee)
     # --- agent loop ---
     max_attempts: int = 4                       # tries per phase (tests / implementation)
+    max_test_rewrites: int = 2                  # times broken tests discovered while implementing are rewritten
     stop_on_failure: bool = True
     step_cooldown_s: float = 2.0                # pause between model calls (laptop heat)
     # --- command / file limits ---
@@ -52,8 +55,11 @@ _RANGES: dict[str, tuple[float, float]] = {
     "num_predict": (16, 32768),
     "num_predict_tests": (16, 32768),
     "temperature": (0.0, 2.0),
+    "retry_temperature_step": (0.0, 1.0),
+    "max_retry_temperature": (0.0, 2.0),
     "request_timeout": (1, 86400),
     "max_attempts": (1, 20),
+    "max_test_rewrites": (0, 10),
     "step_cooldown_s": (0, 3600),
     "test_timeout": (1, 86400),
     "command_mem_mb": (64, 1_000_000),

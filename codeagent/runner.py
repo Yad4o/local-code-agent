@@ -23,6 +23,7 @@ from codeagent.replylog import ReplyLog
 from codeagent.resources import ResourceGuard
 from codeagent.shell import CommandResult, run_command
 from codeagent.state import RunState, WorkspaceLock
+from codeagent.testcheck import check_test_source, diagnose_broken_tests
 from codeagent.workspace import Workspace, WorkspaceError
 
 
@@ -32,6 +33,10 @@ class _Pause(Exception):
 
 class _Fail(Exception):
     """The step could not be completed."""
+
+
+class _TestsBroken(Exception):
+    """The tests themselves cannot run (not an implementation problem): rewrite them."""
 
 
 @dataclass
@@ -118,11 +123,21 @@ class Runner:
         snapshot = self.ws.snapshot(paths)
         self.attempts = 0
         try:
-            tests, satisfied, output = self._tests_phase(step)
-            if satisfied:
-                self.log("   implementation already satisfies the tests")
-            else:
-                self._impl_phase(step, tests, output)
+            feedback = None
+            for rewrite in range(self.cfg.max_test_rewrites + 1):
+                tests, satisfied, output = self._tests_phase(step, feedback)
+                if satisfied:
+                    self.log("   implementation already satisfies the tests")
+                    break
+                try:
+                    self._impl_phase(step, tests, output)
+                    break
+                except _TestsBroken as broken:
+                    if rewrite == self.cfg.max_test_rewrites:
+                        raise _Fail(f"the tests are broken and rewriting them did not help: {broken}") from broken
+                    self.log(f"   the tests cannot run ({broken}); rewriting the tests")
+                    self.ws.restore(snapshot)               # drop the half-built implementation too
+                    feedback = str(broken)
             self._write(tests)                             # tests are exactly what we approved
             sha = git.commit_paths(self.ws.root, paths, step.commit)
             self.state.mark_done(self.plan, step, sha)
@@ -134,14 +149,14 @@ class Runner:
             self.ws.restore(snapshot)
             return StepResult(step.title, "failed", self.attempts, reason=str(e))
 
-    def _tests_phase(self, step: Step):
-        feedback = None
+    def _tests_phase(self, step: Step, feedback: str | None = None):
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step.context))
             text = self._ask(build_tests_prompt(self.plan, step, existing, self.cfg.max_context_chars, feedback),
                              step=step, phase="tests", attempt=n,
                              num_predict=min(self.cfg.num_predict_tests, self.cfg.num_predict))
             files, problems = self._collect(text, step.tests)
+            problems += self._lint_tests(files)
             if problems:
                 feedback = _bullets(problems)
                 self.log(f"   tests attempt {n}: {problems[0]}")
@@ -157,6 +172,11 @@ class Runner:
                 feedback = ("These tests PASS even though the feature is not implemented yet, so they test "
                             "nothing. Assert concrete results from the description so they FAIL first.")
                 self.log(f"   tests attempt {n}: vacuous (passed with no implementation)")
+                continue
+            broken = diagnose_broken_tests(res.output)
+            if broken:                                      # red for the wrong reason: the tests are the problem
+                feedback = broken
+                self.log(f"   tests attempt {n}: tests cannot run ({broken})")
                 continue
             return files, False, res.output                 # red: exactly what we want
         raise _Fail(f"could not get valid failing tests after {self.cfg.max_attempts} attempts: "
@@ -181,6 +201,9 @@ class Runner:
             res = self._run_tests()
             if res.ok:
                 return
+            broken = diagnose_broken_tests(res.output)
+            if broken:
+                raise _TestsBroken(broken)
             output = res.output
             self.log(f"   impl attempt {n}: tests still failing")
         tail = output.strip().splitlines()[-1] if output.strip() else ""
@@ -188,9 +211,23 @@ class Runner:
 
     # ------------------------------------------------------------------ pieces
     def _retry_temperature(self, attempt: int) -> float:
-        """Attempt 1 uses the configured temperature; each retry runs hotter. A small model that
-        fell into a loop at a low temperature would otherwise repeat the exact same loop."""
-        return min(self.cfg.temperature + 0.25 * (attempt - 1), 1.0)
+        """Attempt 1 uses the configured temperature; retries warm up only a little, and never past
+        the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
+        ceiling = max(self.cfg.temperature, self.cfg.max_retry_temperature)
+        return min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+
+    def _lint_tests(self, files: dict[str, str]) -> list[str]:
+        fixtures = set()
+        try:
+            conftest = self.ws.read("tests/conftest.py") or ""
+            fixtures = {n.name for n in ast.walk(ast.parse(conftest)) if isinstance(n, ast.FunctionDef)}
+        except (WorkspaceError, SyntaxError):
+            pass
+        out = []
+        for path, content in files.items():
+            if path.endswith(".py"):
+                out += [f"{path}: {p}" for p in check_test_source(content, fixtures)]
+        return out
 
     def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int,
              num_predict: int | None = None) -> str:

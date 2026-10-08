@@ -96,8 +96,8 @@ cat $W/.codeagent/replies/*-tests-a1.txt                  # header says: seconds
 
 Each log line `model replied in 197s ... CUT OFF at the token limit` means the model rambled
 until it hit `num_predict`. The agent then keeps the longest valid-Python prefix of what it wrote
-(or asks for a SHORTER file), and every retry runs at a higher temperature so a small model
-cannot repeat the same loop. A reply that forgot its closing ``` is accepted.
+(or asks for a SHORTER file), and every retry runs slightly warmer (capped, see `retry_temperature_step`) so a small model
+is nudged out of a loop without turning to nonsense. A reply that forgot its closing ``` is accepted.
 
 ## Safety and "don't crash my laptop"
 
@@ -123,9 +123,11 @@ Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. Most useful keys:
 | `model` | `qwen3.5:0.8b` | name from `ollama list` (env: `CODEAGENT_MODEL`) |
 | `base_url` | `http://localhost:11434` | model server (env: `CODEAGENT_BASE_URL`) |
 | `backend` | `ollama` | or `openai` for llama.cpp's server |
-| `num_ctx` / `num_predict` | `4096` / `1536` | context / max reply tokens (smaller = less VRAM) |
-| `num_predict_tests` | `700` | smaller reply cap while writing tests (a rambling reply costs less time) |
+| `num_ctx` / `num_predict` | `4096` / `1024` | context / max reply tokens (smaller = less VRAM) |
+| `num_predict_tests` | `600` | smaller reply cap while writing tests (a rambling reply costs less time) |
 | `temperature` | `0.2` | try `0` if `smoke` is flaky |
+| `retry_temperature_step` / `max_retry_temperature` | `0.05` / `0.4` | retries warm up only slightly: tiny models write nonsense when hot |
+| `max_test_rewrites` | `2` | how many times tests found broken while implementing are rewritten before the step fails |
 | `max_attempts` | `4` | retries per phase before a step is rolled back |
 | `stop_on_failure` | `true` | stop the plan at the first failed step |
 | `step_cooldown_s` | `2.0` | pause after every model call (keeps the laptop cool) |
@@ -146,3 +148,19 @@ Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. Most useful keys:
 `llm.py` Ollama/OpenAI-compatible client · `shell.py` hardened command runner ·
 `workspace.py` sandboxed files · `git.py` · `resources.py` guard · `state.py` resume + lock ·
 `daemon.py` 24/7 inbox · `cli.py`
+
+## Broken tests are caught early
+
+A test file that can never run (for example `def test_x(text):` with nothing supplying `text`) would fail
+every implementation the same way. The agent therefore:
+
+- rejects test files whose test functions take parameters nothing provides (no `parametrize`, fixture or
+  `conftest.py` fixture), or that contain no tests, before running them;
+- treats a red run caused by a missing fixture, a syntax error or "no tests ran" as *bad tests* (not a
+  valid red) and asks for new tests; a missing module is still the normal red for a new feature;
+- if the tests turn out to be broken while implementing, rolls the step back and rewrites the tests
+  (up to `max_test_rewrites`) instead of retrying the implementation against tests that cannot pass.
+
+Prompts also tell the model to write no comments or docstrings and to write parameterless tests.
+If `smoke` passes but steps still fail on logic, try a stronger model that fits your GPU
+(for example a 1.5B coder model such as `qwen2.5-coder:1.5b`).
