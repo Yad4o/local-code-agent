@@ -2,18 +2,27 @@
 
 Each problem is asked in plain words, like a person typing into a chat. The reply's code is run
 against hidden examples. Each problem is sampled several times, so you see "3/5" rather than luck.
-Run it with `codeagent bench`, then read the verdict at the end.
+Run it with `python tests/bench.py`, then read the verdict at the end.
 """
+import argparse
 import re
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from codeagent.llm import LLMError
-from codeagent.plan import Example, Step
-from codeagent.shell import run_command
-from codeagent.spec_tests import render_tests
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from agent import (
+    Example,
+    LLMError,
+    Step,
+    load_config,
+    make_client,
+    render_tests,
+    run_command,
+)
 
 CART = [{"name": "apple", "price": 1.5, "quantity": 1}]
 
@@ -74,7 +83,7 @@ PROBLEMS: tuple[Problem, ...] = (
 )
 
 SYSTEM = "You are a helpful programmer. Reply with the Python code only."
-FENCE = re.compile(r"```[\w+.\-]*\n(.*?)```", re.S)
+FENCE = re.compile(r"```[\w+.\-]*\n(.*?)```", re.DOTALL)
 
 
 def extract_code(reply: str) -> str:
@@ -82,7 +91,7 @@ def extract_code(reply: str) -> str:
     m = FENCE.search(reply)
     if m:
         return m.group(1)
-    unclosed = re.search(r"```[\w+.\-]*\n(.*)", reply, re.S)
+    unclosed = re.search(r"```[\w+.\-]*\n(.*)", reply, re.DOTALL)
     return unclosed.group(1) if unclosed else reply
 
 
@@ -125,7 +134,7 @@ def verdict(scores: dict[str, tuple[int, int]]) -> list[str]:
                    "Keep every step as small as the 'basic' problems and write the algorithm in the description.")
     elif hard is not None and hard < 0.5:
         out.append("The model handles small and medium functions but not a function that combines several "
-                   "rules. Split big functions into small steps (see examples/cart_split.toml).")
+                   "rules. Split big functions into small steps (see tests/examples/cart_split.json).")
     else:
         out.append("The model is capable. If the agent still fails, the plan (description/examples) or the "
                    "harness is the problem, not the model.")
@@ -160,3 +169,23 @@ def run_bench(cfg, client, *, tries: int, temperature: float, only: list[str] | 
     for line in verdict(scores):
         out("\n" + line)
     return scores
+
+
+def main(argv=None, *, llm_factory=make_client, out=print) -> int:
+    ap = argparse.ArgumentParser(description="Raw model test: can the model write small functions at all?")
+    ap.add_argument("--tries", type=int, default=5, help="samples per problem (default 5)")
+    ap.add_argument("--temperature", type=float, default=0.4)
+    ap.add_argument("--only", nargs="+", metavar="PROBLEM")
+    args = ap.parse_args(argv)
+    known = {p.key for p in PROBLEMS}
+    unknown = [k for k in (args.only or []) if k not in known]
+    if unknown:
+        out(f"unknown problem(s): {', '.join(unknown)}. Choose from: {', '.join(sorted(known))}")
+        return 2
+    cfg = load_config()
+    run_bench(cfg, llm_factory(cfg), tries=args.tries, temperature=args.temperature, only=args.only, out=out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

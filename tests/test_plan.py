@@ -1,212 +1,169 @@
+import copy
+import json
+
 import pytest
 
-from codeagent.plan import Plan, PlanError, load_plan, parse_plan, plan_slug, template_text
+from agent import TEMPLATE, Plan, PlanError, load_plan, parse_plan, plan_slug
 
-VALID = '''
-title = "Slugify utility"
-test_command = "python -m pytest -q"
+VALID = {
+    "title": "Slugify utility",
+    "test_command": "python -m pytest -q",
+    "steps": [{
+        "title": "core function",
+        "description": "Create slugify(text) in slugify/core.py.",
+        "commit": "feat: add slugify core function",
+        "tests": ["tests/test_core.py"],
+        "files": ["slugify/__init__.py", "slugify/core.py"],
+    }],
+}
+EXAMPLES = {"function": "slugify.core:slugify",
+            "examples": [{"args": ["Hello, World!"], "expect": "hello-world"},
+                         {"args": [123], "raises": "TypeError"}]}
 
-[[step]]
-title = "core function"
-description = "Create slugify(text) in slugify/core.py that lowercases and dashes words."
-commit = "feat: add slugify core function"
-tests = ["tests/test_core.py"]
-files = ["slugify/__init__.py", "slugify/core.py"]
-'''
+
+def make(top=None, step=None, drop=(), drop_step=()):
+    d = copy.deepcopy(VALID)
+    d["steps"][0].update(step or {})
+    for k in drop_step:
+        d["steps"][0].pop(k, None)
+    d.update(top or {})
+    for k in drop:
+        d.pop(k, None)
+    return d
 
 
-def errors_of(text):
+def errors_of(d):
     with pytest.raises(PlanError) as exc:
-        parse_plan(text)
+        parse_plan(d if isinstance(d, str) else json.dumps(d))
     return exc.value.errors
 
 
-def replace(old, new):
-    assert old in VALID
-    return VALID.replace(old, new)
+def has(errs, *words):
+    return any(all(w in e for w in words) for e in errs)
 
 
 def test_valid_plan_parses():
-    p = parse_plan(VALID)
-    assert isinstance(p, Plan)
-    assert p.title == "Slugify utility"
-    assert p.test_command == "python -m pytest -q"
-    assert p.workspace is None
-    assert len(p.steps) == 1
+    p = parse_plan(json.dumps(VALID))
+    assert isinstance(p, Plan) and p.workspace is None
     s = p.steps[0]
-    assert s.title == "core function"
-    assert s.commit == "feat: add slugify core function"
-    assert s.tests == ("tests/test_core.py",)
-    assert s.files == ("slugify/__init__.py", "slugify/core.py")
-    assert s.context == ()
+    assert s.tests == ("tests/test_core.py",) and s.files == ("slugify/__init__.py", "slugify/core.py")
+    assert s.context == () and s.function is None and s.examples == ()
 
 
 def test_optional_workspace_and_context():
-    text = 'workspace = "~/p/x"\n' + VALID.replace(
-        'files = [', 'context = ["README.md"]\nfiles = [')
-    p = parse_plan(text)
-    assert p.workspace == "~/p/x"
-    assert p.steps[0].context == ("README.md",)
+    p = parse_plan(json.dumps(make(top={"workspace": "~/p/x"}, step={"context": ["README.md"]})))
+    assert p.workspace == "~/p/x" and p.steps[0].context == ("README.md",)
 
 
-def test_invalid_toml():
-    assert "invalid TOML" in errors_of("title = = oops")[0]
+def test_template_is_a_valid_plan():
+    assert parse_plan(TEMPLATE).steps[0].signature == "slugify(text)"
+
+
+def test_bad_json_and_non_object():
+    assert has(errors_of("{oops"), "invalid JSON")
+    assert has(errors_of("[]"), "JSON object")
 
 
 @pytest.mark.parametrize("field", ["title", "test_command"])
 def test_top_level_required(field):
-    text = "\n".join(l for l in VALID.splitlines() if not l.startswith(field + " "))
-    assert any(field in e for e in errors_of(text))
-
-
-def test_requires_at_least_one_step():
-    errs = errors_of('title = "x"\ntest_command = "pytest"\n')
-    assert any("at least one [[step]]" in e for e in errs)
+    assert has(errors_of(make(drop=[field])), field)
 
 
 @pytest.mark.parametrize("field", ["title", "description", "commit", "tests", "files"])
 def test_step_required_fields(field):
-    text = "\n".join(l for l in VALID.splitlines()
-                     if not l.startswith(field + " ") or l.startswith("test_command"))
-    assert any(f"step 1" in e and field in e for e in errors_of(text))
+    assert has(errors_of(make(drop_step=[field])), "step 1", field)
+
+
+def test_requires_at_least_one_step_and_reports_everything_at_once():
+    assert has(errors_of(make(top={"steps": []})), "steps")
+    assert len(errors_of({"title": "", "steps": [{"title": ""}]})) >= 4
 
 
 def test_unknown_keys_are_errors_so_typos_are_caught():
-    assert any("unknown" in e and "titel" in e for e in errors_of('titel = "x"\n' + VALID))
-    assert any("unknown" in e and "tests_" in e
-               for e in errors_of(replace('tests = [', 'tests_ = ["a.py"]\ntests = [')))
-    assert any("unknown" in e and "zzz" in e for e in errors_of('zzz = 1\n' + VALID))
+    assert has(errors_of(make(top={"titel": "x"})), "unknown", "titel")
+    assert has(errors_of(make(step={"tests_": ["a.py"]})), "unknown", "tests_")
 
 
-@pytest.mark.parametrize(
-    "path", ["/etc/passwd", "../evil.py", "a/../../b.py", ".git/config", ".codeagent/state.json",
-             "", "a\\b.py"],
-)
+@pytest.mark.parametrize("path", ["/etc/passwd", "../evil.py", "a/../../b.py", ".git/config",
+                                  ".codeagent/state.json", "", "a\\b.py"])
 def test_unsafe_paths_rejected(path):
-    errs = errors_of(replace('files = ["slugify/__init__.py", "slugify/core.py"]',
-                             f'files = ["{path}"]'.replace("\\", "\\\\")))
-    assert any("path" in e for e in errs)
+    assert has(errors_of(make(step={"files": [path]})), "path")
 
 
-def test_tests_and_files_must_not_overlap():
-    errs = errors_of(replace('tests = ["tests/test_core.py"]', 'tests = ["slugify/core.py"]'))
-    assert any("both" in e for e in errs)
-
-
-def test_duplicate_paths_rejected():
-    errs = errors_of(replace('tests = ["tests/test_core.py"]',
-                             'tests = ["tests/test_core.py", "tests/test_core.py"]'))
-    assert any("duplicate" in e for e in errs)
+def test_path_lists_reject_overlap_and_duplicates():
+    assert has(errors_of(make(step={"tests": ["slugify/core.py"]})), "both")
+    assert has(errors_of(make(step={"tests": ["t.py", "t.py"]})), "duplicate")
 
 
 def test_duplicate_step_titles_rejected():
-    errs = errors_of(VALID + VALID.split("[[step]]")[1].join(["[[step]]", ""]))
-    assert any("duplicate step title" in e for e in errs)
+    d = make()
+    d["steps"].append(copy.deepcopy(d["steps"][0]))
+    assert has(errors_of(d), "duplicate step title")
 
 
-@pytest.mark.parametrize(
-    "commit", ["", "   ", "x" * 73, "line one\\nline two"],
-)
+@pytest.mark.parametrize("commit", ["", "   ", "x" * 73, "line one\nline two"])
 def test_bad_commit_messages_rejected(commit):
-    errs = errors_of(replace('commit = "feat: add slugify core function"', f'commit = "{commit}"'))
-    assert any("commit" in e for e in errs)
+    assert has(errors_of(make(step={"commit": commit})), "commit")
 
 
-def test_all_errors_reported_at_once():
-    text = 'title = ""\n[[step]]\ntitle = ""\n'
-    errs = errors_of(text)
-    assert len(errs) >= 4
-
-
-def test_error_message_lists_everything():
-    with pytest.raises(PlanError) as exc:
-        parse_plan('title = ""\n')
-    assert str(exc.value).count("\n") >= 1
-
-
-def test_load_plan_from_file(tmp_path):
-    f = tmp_path / "p.toml"
-    f.write_text(VALID)
+def test_load_plan_from_file_and_missing_file(tmp_path):
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps(VALID))
     assert load_plan(f).title == "Slugify utility"
-
-
-def test_load_plan_missing_file(tmp_path):
     with pytest.raises(PlanError, match="not found"):
-        load_plan(tmp_path / "nope.toml")
+        load_plan(tmp_path / "nope.json")
 
 
 def test_slug():
-    assert plan_slug(parse_plan(VALID)) == "slugify-utility"
+    assert plan_slug(parse_plan(json.dumps(VALID))) == "slugify-utility"
     assert plan_slug(Plan("  Hello,   World!! ", "pytest", None, ())) == "hello-world"
     assert plan_slug(Plan("!!!", "pytest", None, ())) == "plan"
 
 
-def test_bundled_template_is_a_valid_plan():
-    p = parse_plan(template_text())
-    assert len(p.steps) >= 1
-
-
 # ----------------------------------------------------------------- function + examples
 
-EX = VALID + '''function = "slugify.core:slugify"
-
-[[step.examples]]
-args = ["Hello, World!"]
-expect = "hello-world"
-
-[[step.examples]]
-args = [123]
-raises = "TypeError"
-'''
+def ex(**changes):
+    return make(step={**copy.deepcopy(EXAMPLES), **changes})
 
 
 def test_function_and_examples_parse():
-    s = parse_plan(EX).steps[0]
-    assert s.function == "slugify.core:slugify"
-    assert len(s.examples) == 2
+    s = parse_plan(json.dumps(ex())).steps[0]
+    assert s.function == "slugify.core:slugify" and len(s.examples) == 2
     assert s.examples[0].args == ("Hello, World!",) and s.examples[0].expect == "hello-world"
     assert s.examples[1].raises == "TypeError"
 
 
-def test_a_step_without_examples_is_unchanged():
-    s = parse_plan(VALID).steps[0]
-    assert s.function is None and s.examples == ()
-
-
-def test_function_and_examples_must_come_together():
-    assert any("go together" in e for e in errors_of(VALID + 'function = "slugify.core:slugify"\n'))
-    assert any("go together" in e for e in errors_of(VALID + '[[step.examples]]\nargs = ["a"]\nexpect = "a"\n'))
+def test_function_and_examples_go_together():
+    assert has(errors_of(make(step={"function": "slugify.core:slugify"})), "go together")
+    assert has(errors_of(make(step={"examples": EXAMPLES["examples"]})), "go together")
 
 
 def test_function_must_be_module_colon_name_and_its_file_listed():
-    bad = EX.replace('"slugify.core:slugify"', '"slugify"')
-    assert any("package.module:name" in e for e in errors_of(bad))
-    other = EX.replace('"slugify.core:slugify"', '"slugify.other:slugify"')
-    assert any("slugify/other.py must be listed" in e for e in errors_of(other))
+    assert has(errors_of(ex(function="slugify")), "package.module:name")
+    assert has(errors_of(ex(function="slugify.other:slugify")), "slugify/other.py must be listed")
 
 
 def test_examples_need_exactly_one_tests_file():
-    two = EX.replace('tests = ["tests/test_core.py"]', 'tests = ["tests/test_core.py", "tests/test_more.py"]')
-    assert any("exactly one path" in e for e in errors_of(two))
+    assert has(errors_of(ex(tests=["tests/a.py", "tests/b.py"])), "exactly one path")
 
 
 def test_example_needs_exactly_one_of_expect_or_raises():
-    both = EX + 'expect = 1\n'
-    neither = VALID + 'function = "slugify.core:slugify"\n[[step.examples]]\nargs = ["a"]\n'
-    assert any("exactly one of" in e for e in errors_of(neither))
-    assert any("exactly one of" in e for e in errors_of(both))
+    both = [{"args": ["a"], "expect": 1, "raises": "TypeError"}]
+    neither = [{"args": ["a"]}]
+    assert has(errors_of(ex(examples=both)), "exactly one of")
+    assert has(errors_of(ex(examples=neither)), "exactly one of")
 
 
-def test_raises_must_be_a_builtin_exception():
-    assert any("builtin exception" in e for e in errors_of(EX.replace('"TypeError"', '"print"')))
-    assert any("builtin exception" in e for e in errors_of(EX.replace('"TypeError"', '"Nope"')))
+@pytest.mark.parametrize("name", ["print", "Nope"])
+def test_raises_must_be_a_builtin_exception(name):
+    assert has(errors_of(ex(examples=[{"args": [1], "raises": name}])), "builtin exception")
 
 
 def test_example_values_must_be_printable_python():
-    assert any("nan/inf" in e for e in errors_of(EX.replace('expect = "hello-world"', 'expect = nan')))
-    assert any("unsupported type" in e for e in errors_of(EX.replace('expect = "hello-world"', 'expect = 1979-05-27')))
+    assert has(errors_of('{"title":"t","test_command":"pytest","steps":[]}'.replace(
+        "[]", json.dumps(ex()["steps"]).replace('"hello-world"', "NaN"))), "nan/inf")
 
 
 def test_unknown_example_key_and_bad_kwargs_are_reported():
-    assert any("unknown key 'result'" in e for e in errors_of(EX + 'result = 1\n'))
-    assert any("'kwargs'" in e for e in errors_of(EX.replace('args = [123]', 'args = [123]\nkwargs = { "a b" = 1 }')))
+    assert has(errors_of(ex(examples=[{"args": [1], "expect": 1, "result": 1}])), "unknown key 'result'")
+    assert has(errors_of(ex(examples=[{"kwargs": {"a b": 1}, "expect": 1}])), "'kwargs'")

@@ -2,8 +2,7 @@ import socket
 
 import pytest
 
-from codeagent.config import Config
-from codeagent.llm import LLMError, list_models, make_client
+from agent import Config, LLMError, list_models, make_client
 
 MSGS = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]
 
@@ -32,9 +31,22 @@ def test_ollama_chat_sends_expected_payload_and_returns_content(stub):
     assert body["model"] == "m:1b"
     assert body["messages"] == MSGS
     assert body["stream"] is False
-    assert body["think"] is False                      # no slow hidden reasoning on a tiny model
+    assert body["think"] is True                       # agentic coding: the model reasons before it writes
     assert body["keep_alive"] == "5m"
     assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1, "repeat_penalty": 1.1}
+
+
+def test_thinking_can_be_switched_off_and_gpt_oss_gets_a_level(stub):
+    stub.responses = [ollama_reply("a")]
+    for kw in ({"think": False}, {"model": "gpt-oss:20b", "think_level": "medium"}, {"model": "gpt-oss:20b", "think": False}):
+        make_client(cfg_for(stub, **kw)).chat(MSGS)
+    assert [r[2]["think"] for r in stub.requests] == [False, "medium", False]
+
+
+def test_running_out_of_tokens_while_thinking_is_a_clear_error(stub):
+    stub.responses = [(200, {"message": {"content": "", "thinking": "hmm" * 50}, "done_reason": "length"})]
+    with pytest.raises(LLMError, match="thinking"):
+        make_client(cfg_for(stub, num_predict=64)).chat(MSGS)
 
 
 def test_stop_sequences_are_sent_only_when_given(stub):

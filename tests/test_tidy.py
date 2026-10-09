@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from codeagent.tidy import ruff_fix, ruff_problems, tidy_python
+from agent import ruff_fix, ruff_problems, tidy_python
 
 needs_ruff = pytest.mark.skipif(shutil.which("ruff") is None, reason="ruff not installed")
 

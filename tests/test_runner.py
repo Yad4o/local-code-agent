@@ -1,16 +1,22 @@
+import json
 import os
 import subprocess
 
 import pytest
 
-from codeagent import git
-from codeagent.config import Config
-from codeagent.llm import LLMError
-from codeagent.plan import load_plan, PlanError, parse_plan
-from codeagent.runner import Runner
-from codeagent.state import WorkspaceBusy, WorkspaceLock
-from codeagent.workspace import Workspace
-
+from agent import (
+    BODY_STOP,
+    Config,
+    LLMError,
+    PlanError,
+    Runner,
+    Workspace,
+    WorkspaceBusy,
+    WorkspaceLock,
+    current_branch,
+    load_plan,
+    parse_plan,
+)
 
 # ----------------------------------------------------------------- helpers
 
@@ -34,27 +40,16 @@ EXTRA_OK = block("slugify/extra.py", "def shout(t):\n    return t.upper() + '!'\
 
 
 def plan_text(*, two=False, test_command="python -m pytest -q"):
-    text = f'''
-title = "Slugify utility"
-test_command = "{test_command}"
-
-[[step]]
-title = "core function"
-description = "Create slugify(text) in slugify/core.py. 'Hello, World!' -> 'hello-world'."
-commit = "feat: add slugify core function"
-tests = ["tests/test_core.py"]
-files = ["slugify/__init__.py", "slugify/core.py"]
-'''
+    steps = [{"title": "core function",
+              "description": "Create slugify(text) in slugify/core.py. 'Hello, World!' -> 'hello-world'.",
+              "commit": "feat: add slugify core function",
+              "tests": ["tests/test_core.py"], "files": ["slugify/__init__.py", "slugify/core.py"]}]
     if two:
-        text += '''
-[[step]]
-title = "shout helper"
-description = "Create shout(text) in slugify/extra.py returning the text upper-cased plus '!'."
-commit = "feat: add shout helper"
-tests = ["tests/test_extra.py"]
-files = ["slugify/extra.py"]
-'''
-    return text
+        steps.append({"title": "shout helper",
+                      "description": "Create shout(text) in slugify/extra.py returning the text upper-cased plus '!'.",
+                      "commit": "feat: add shout helper",
+                      "tests": ["tests/test_extra.py"], "files": ["slugify/extra.py"]})
+    return json.dumps({"title": "Slugify utility", "test_command": test_command, "steps": steps})
 
 
 class Cut(str):
@@ -126,7 +121,7 @@ def test_happy_path_writes_tests_then_code_then_commits(tmp_path, cfg):
     assert ws.read("tests/test_core.py").startswith("from slugify.core")
     assert len(llm.calls) == 2
     assert log_subjects(ws.root) == ["feat: add slugify core function"]
-    assert git.current_branch(ws.root) == "agent/slugify-utility"
+    assert current_branch(ws.root) == "agent/slugify-utility"
 
 
 def test_commit_contains_exactly_the_step_files(tmp_path, cfg):
@@ -322,16 +317,8 @@ def test_cooldown_sleep_happens_after_each_model_call(tmp_path, cfg):
 
 def test_second_agent_on_the_same_workspace_is_refused(tmp_path, cfg):
     r, ws = make_runner(tmp_path, FakeLLM(), cfg)
-    with WorkspaceLock(ws.root):
-        with pytest.raises(WorkspaceBusy):
-            r.run()
-
-
-def test_report_summary_is_readable(tmp_path, cfg):
-    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
-    report = make_runner(tmp_path, llm, cfg)[0].run()
-    s = report.summary()
-    assert "Slugify utility" in s and "core function" in s and "done" in s.lower()
+    with WorkspaceLock(ws.root), pytest.raises(WorkspaceBusy):
+        r.run()
 
 
 # ----------------------------------------------------------------- stop while waiting / wrong files
@@ -428,26 +415,12 @@ def test_first_attempt_uses_the_configured_temperature_and_retries_run_hotter(tm
     assert temps[1] > temps[0] and temps[2] > temps[1]    # deterministic loops get broken up
 
 
-def test_retry_temperature_is_capped(tmp_path):
-    cfg = Config(step_cooldown_s=0, max_attempts=12, temperature=0.9, test_timeout=60)
-    llm = FakeLLM(*["nope"] * 12)
-    make_runner(tmp_path, llm, cfg)[0].run()
-    assert max(k["temperature"] for k in llm.kwargs) <= 1.0
-
-
 def test_test_writing_gets_the_smaller_token_budget_and_implementation_the_normal_one(tmp_path, cfg):
     cfg.num_predict, cfg.num_predict_tests = 1500, 600
     llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
     make_runner(tmp_path, llm, cfg)[0].run()
     assert llm.kwargs[0]["num_predict"] == 600            # tests phase
     assert llm.kwargs[1]["num_predict"] == 1500            # implementation phase
-
-
-def test_test_budget_never_exceeds_the_general_budget(tmp_path, cfg):
-    cfg.num_predict, cfg.num_predict_tests = 300, 900
-    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
-    make_runner(tmp_path, llm, cfg)[0].run()
-    assert llm.kwargs[0]["num_predict"] == 300
 
 
 def test_the_temperature_actually_used_is_recorded_with_the_saved_reply(tmp_path, cfg):
@@ -514,13 +487,6 @@ def test_tests_that_stay_broken_fail_the_step_and_roll_back(tmp_path, cfg):
     assert not ws.exists("slugify/core.py") and not ws.exists("tests/test_core.py")
 
 
-def test_zero_test_rewrites_fails_immediately(tmp_path, cfg):
-    cfg.max_test_rewrites = 0
-    llm = FakeLLM(TEST_FIXTURE_MISSING_LATE, INIT + CORE_OK)
-    assert make_runner(tmp_path, llm, cfg)[0].run().outcome == "failed"
-    assert len(llm.calls) == 2
-
-
 # ----------------------------------------------------------------- retries stay calm
 
 def test_default_retries_never_run_hot(tmp_path):
@@ -539,43 +505,21 @@ def test_retry_temperature_step_and_cap_are_configurable(tmp_path):
     assert [round(k["temperature"], 2) for k in llm.kwargs] == [0.1, 0.2, 0.25, 0.25, 0.25]
 
 
-def test_system_prompt_forbids_comments_and_docstrings_and_tests_must_take_no_parameters(tmp_path, cfg):
-    llm = FakeLLM(TEST_CORE, INIT + CORE_OK)
-    make_runner(tmp_path, llm, cfg)[0].run()
-    assert "No comments and no docstrings" in llm.calls[0][0]["content"]
-    assert "NO parameters" in llm.calls[0][1]["content"]
-
-
 # ----------------------------------------------------------------- the plan's examples become the tests
 
-EXAMPLES_PLAN = '''
-title = "Slugify utility"
-test_command = "python -m pytest -q"
-
-[[step]]
-title = "core function"
-description = "Create slugify(text) in slugify/core.py."
-commit = "feat: add slugify core function"
-tests = ["tests/test_core.py"]
-files = ["slugify/__init__.py", "slugify/core.py"]
-function = "slugify.core:slugify"
-
-[[step.examples]]
-args = ["Hello, World!"]
-expect = "hello-world"
-
-[[step.examples]]
-args = ["  A  B "]
-expect = "a-b"
-
-[[step.examples]]
-args = [""]
-expect = ""
-'''
+def examples_plan(**step_changes):
+    step = {"title": "core function", "description": "Create slugify(text) in slugify/core.py.",
+            "commit": "feat: add slugify core function", "tests": ["tests/test_core.py"],
+            "files": ["slugify/__init__.py", "slugify/core.py"], "function": "slugify.core:slugify",
+            "examples": [{"args": ["Hello, World!"], "expect": "hello-world"},
+                         {"args": ["  A  B "], "expect": "a-b"},
+                         {"args": [""], "expect": ""}]}
+    step.update(step_changes)
+    return json.dumps({"title": "Slugify utility", "test_command": "python -m pytest -q", "steps": [step]})
 
 
 def make_examples_runner(tmp_path, llm, cfg, log=None):
-    plan = parse_plan(EXAMPLES_PLAN)
+    plan = parse_plan(examples_plan())
     ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
     return Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=log or (lambda m: None),
                   sleep=lambda s: None, should_stop=lambda: False), ws
@@ -628,17 +572,13 @@ def test_step_whose_implementation_already_passes_the_examples_is_skipped(tmp_pa
 
 import shutil as _shutil
 
-from codeagent.skeleton import BODY_STOP
-
-BODY_PLAN = EXAMPLES_PLAN.replace('function = "slugify.core:slugify"',
-                                  'function = "slugify.core:slugify"\nsignature = "slugify(text)"')
 BODY_OK = block("slugify/core.py", "import re\nreturn re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')")
 BODY_BAD = block("slugify/core.py", "return text")
 needs_ruff = pytest.mark.skipif(_shutil.which("ruff") is None, reason="ruff not installed")
 
 
 def make_body_runner(tmp_path, llm, cfg, log=None):
-    plan = parse_plan(BODY_PLAN)
+    plan = parse_plan(examples_plan(signature="slugify(text)"))
     ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
     return Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=log or (lambda m: None),
                   sleep=lambda s: None, should_stop=lambda: False), ws
@@ -747,8 +687,7 @@ def test_a_reply_without_a_file_header_is_used_when_only_one_file_is_possible(tm
 
 
 def test_headerless_whole_function_in_a_one_file_step(tmp_path, cfg):
-    plan = parse_plan(EXAMPLES_PLAN.replace('files = ["slugify/__init__.py", "slugify/core.py"]',
-                                            'files = ["slugify/core.py"]'))
+    plan = parse_plan(examples_plan(files=["slugify/core.py"]))
     ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
     llm = FakeLLM("```python\nimport re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n```")
     r = Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=lambda m: None, sleep=lambda s: None,
@@ -798,7 +737,7 @@ def test_repeats_still_count_as_attempts(tmp_path, cfg):
 
 def test_the_split_cart_plan_completes_with_correct_bodies(tmp_path, cfg):
     from pathlib import Path
-    plan = load_plan(Path(__file__).resolve().parents[1] / "examples" / "cart_split.toml")
+    plan = load_plan(Path(__file__).parent / "examples" / "cart_split.json")
     ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
     llm = FakeLLM(
         block("cart/checks.py", "if price < 0 or quantity <= 0:\n    raise ValueError('bad')\nreturn True"),

@@ -15,13 +15,11 @@ dev = ["pytest", "ruff"]
 tools = ["ruff"]                 # optional: unused-import removal and undefined-name checks
 
 [project.scripts]
-codeagent = "codeagent.cli:entry"
+codeagent = "agent:entry"
 
 [tool.setuptools]
-packages = ["codeagent"]
+py-modules = ["agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-[tool.setuptools.package-data]
-codeagent = ["*.toml"]
+pythonpath = ["."]

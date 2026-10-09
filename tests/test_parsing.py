@@ -1,4 +1,4 @@
-from codeagent.parsing import FileBlock, parse_file_blocks, strip_thinking
+from agent import FileBlock, parse_file_blocks, strip_thinking
 
 
 def blocks(text):
@@ -126,16 +126,16 @@ def test_earlier_complete_blocks_survive_a_cut_off_last_block():
 
 
 def test_anonymous_blocks_are_reported_separately():
-    from codeagent.parsing import parse_file_blocks
+    from agent import parse_file_blocks
     r = parse_file_blocks("```python\nprint('hi')\n```")
     assert r.blocks == [] and r.anonymous == ["print('hi')\n"]
 
 
 def test_unclosed_anonymous_block_is_kept_as_anonymous():
-    from codeagent.parsing import parse_file_blocks
+    from agent import parse_file_blocks
     assert parse_file_blocks("```python\nx = 1\n").anonymous == ["x = 1\n"]
 
 
 def test_named_blocks_are_not_anonymous():
-    from codeagent.parsing import parse_file_blocks
+    from agent import parse_file_blocks
     assert parse_file_blocks("FILE: a.py\n```python\nx = 1\n```").anonymous == []

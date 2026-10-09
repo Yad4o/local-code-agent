@@ -37,88 +37,75 @@ pip install -e ".[dev]"
 python -m pytest -q                 # all tests should pass
 
 ollama list                         # note your model's exact name
-export CODEAGENT_MODEL="<name from ollama list>"   # or set `model = ...` in codeagent.toml
+export CODEAGENT_MODEL="<name from ollama list>"
 
 codeagent doctor                    # checks Ollama, the model, git, RAM/battery/temp/disk
 codeagent smoke --tries 5           # can YOUR model follow the output format? (needs >= 3/5)
-codeagent template --out plan.toml  # a plan skeleton (see examples/slugify.toml)
-codeagent check plan.toml           # validate a plan without running anything
-codeagent run plan.toml --workspace ~/agent-projects/demo
+codeagent template --out plan.json  # a plan skeleton (see tests/examples/)
+codeagent check plan.json           # validate a plan without running anything
+codeagent run plan.json --workspace ~/agent-projects/demo
 ```
 
-Exit codes of `run`: `0` done, `1` a step failed, `2` bad plan/config, `3` paused
-(model server down or system resources low; just run it again, finished steps are skipped).
+Everything lives in one module, `agent.py` (`python -m agent` works too). Exit codes of `run`: `0` done,
+`1` a step failed, `2` bad plan/settings, `3` paused (model server down or system resources low; just run it
+again, finished steps are skipped), `4` workspace busy.
 
-## Plans (always the same structure)
+## Thinking
 
-Plans are TOML, validated strictly before anything runs (all mistakes are reported
-at once). Every step names **exactly** the files it may touch:
+Agentic coding needs the model to reason before it writes code, so `think` is **on** by default
+(`think_level = high` for models that take a level, such as gpt-oss; other models take on/off).
+Thinking tokens count against `num_predict`, so the defaults are larger (4096 / 2048) than for a
+non-thinking model. If a reply ends with "used all N tokens thinking", raise `CODEAGENT_NUM_PREDICT`
+or lower `CODEAGENT_THINK_LEVEL`. Switch it off with `CODEAGENT_THINK=false`.
 
-```toml
-title = "Slugify utility"
-test_command = "python -m pytest -q"
+## Plans
 
-[[step]]
-title = "slugify lowercases and joins words with dashes"
-description = "Create slugify(text) in slugify/core.py ... 'Hello, World!' -> 'hello-world'. Tests import: from slugify.core import slugify"
-commit = "feat: add slugify core function"
-tests = ["tests/test_core.py"]                    # written FIRST
-files = ["slugify/__init__.py", "slugify/core.py"]  # the only implementation files it may write
+A plan is a small JSON file with one fixed structure, validated strictly before anything runs (all
+mistakes are reported at once). Every step names **exactly** the files it may touch:
+
+```json
+{
+  "title": "Slugify utility",
+  "test_command": "python -m pytest -q",
+  "steps": [{
+    "title": "slugify lowercases and joins words with dashes",
+    "description": "Create slugify(text) in slugify/core.py ... 'Hello, World!' -> 'hello-world'.",
+    "commit": "feat: add slugify core function",
+    "tests": ["tests/test_core.py"],
+    "files": ["slugify/__init__.py", "slugify/core.py"]
+  }]
+}
 ```
 
-**Let the plan decide what is correct (recommended for small models).** A tiny model that also writes
-the tests invents contradictory ones. Give the step a `function` and `[[step.examples]]` instead and the
-agent prints the test file itself, so the model only writes the implementation
-(see `examples/cart.toml`):
+**Let the plan decide what is correct (recommended for small models).** A tiny model that also writes the
+tests invents contradictory ones. Give the step a `function` and `examples` and the agent prints the test
+file itself, so the model only writes the implementation (see `tests/examples/cart.json`):
 
-```toml
-function = "cart.engine:add_item"        # package.module:name (module file must be in `files`)
-
-[[step.examples]]
-args = [[], "apple", 1.5]
-expect = [{ name = "apple", price = 1.5, quantity = 1 }]
-
-[[step.examples]]
-args = [[], "apple", -1.0]
-raises = "ValueError"
+```json
+"function": "cart.engine:add_item",
+"examples": [
+  {"args": [[], "apple", 1.5], "expect": [{"name": "apple", "price": 1.5, "quantity": 1}]},
+  {"args": [[], "apple", -1.0], "raises": "ValueError"}
+]
 ```
 
-Values must be plain TOML (strings, numbers, booleans, lists, tables). Floats are compared exactly.
-The agent also checks, with code rather than prompts, that the implementation really defines `function`.
-Model-written tests are still linted for duplicate test names and parameters nothing provides.
-
-Tips for a tiny model: **one function per step**, exact input -> output examples,
-and name the exact import the tests must use. The agent works on a branch
-`agent/<plan-title>`, never on your `main`.
-
-## 24/7 mode
-
-```bash
-codeagent daemon --inbox ~/agent-inbox        # drop plan .toml files into the inbox (each needs `workspace = "..."`)
-```
-
-`inbox/` holds new plans, `running/` the current one, `done/` and `failed/` the
-results with a `*.report.txt` / `*.error.txt` explaining what happened. After a
-crash or reboot, interrupted plans are re-queued and resume where they stopped.
-Repeated model outages back off (up to 10 min) instead of spinning.
-
-To start it at boot and restart it after crashes, use the systemd user service in
-`deploy/codeagent.service` (instructions at the top of that file).
+Values must be plain JSON (strings, numbers, booleans, lists, objects). Floats are compared exactly. Add
+`"signature": "add_item(cart, name, price, quantity=1)"` and the harness writes the `def` line too, so the
+model writes only the body. Tips for a tiny model: **one function per step**, exact input -> output
+examples. The agent works on a branch `agent/<plan-title>`, never on your `main`.
 
 ## Watching it work / finding out why a step failed
 
 ```bash
 W=~/agent-projects/demo                                   # your --workspace
 tail -f $W/.codeagent/agent.log                           # live log (also printed in the terminal)
-watch -n 2 "cd $W && git status --short && echo --- && git log --oneline | head"   # files + commits live
 ls $W/.codeagent/replies/                                 # EVERY raw model reply, newest last
 cat $W/.codeagent/replies/*-tests-a1.txt                  # header says: seconds, cut off yes/no, temperature
 ```
 
-Each log line `model replied in 197s ... CUT OFF at the token limit` means the model rambled
-until it hit `num_predict`. The agent then keeps the longest valid-Python prefix of what it wrote
-(or asks for a SHORTER file), and every retry runs slightly warmer (capped, see `retry_temperature_step`) so a small model
-is nudged out of a loop without turning to nonsense. A reply that forgot its closing ``` is accepted.
+`model replied in 197s ... CUT OFF at the token limit` means the model rambled until it hit `num_predict`.
+The agent then keeps the longest valid-Python prefix (or asks for a SHORTER file), and every retry runs
+slightly warmer (capped) so a small model is nudged out of a loop without turning to nonsense.
 
 ## Safety and "don't crash my laptop"
 
@@ -131,60 +118,47 @@ is nudged out of a loop without turning to nonsense. A reply that forgot its clo
 | half-finished work | per-step snapshot/rollback; atomic file writes; crash-safe progress file |
 | RAM / heat / battery / disk | resource guard pauses before every model call (min free RAM, battery % when unplugged, CPU temp, free disk) and resumes by itself |
 | secrets leaking into generated code's environment | `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` env vars are not passed to commands |
-| code leaving the machine | refuses any non-loopback model URL unless `allow_remote_llm = true` |
+| code leaving the machine | refuses any non-loopback model URL unless `CODEAGENT_ALLOW_REMOTE_LLM=true` |
 | two agents in one folder | exclusive lock per workspace |
 | git surprises | commits only the step's files; never prompts, never signs (no hang), never runs your hooks |
 
-## Configuration (`codeagent.toml`, all keys optional)
+## Settings
 
-Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. Most useful keys:
+Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. There is no config file yet: every setting of the
+`Config` dataclass in `agent.py` can be overridden with an environment variable `CODEAGENT_<NAME>`
+(lists are comma separated). The useful ones:
 
-| key | default | meaning |
+| variable | default | meaning |
 |---|---|---|
-| `model` | `qwen3.5:0.8b` | name from `ollama list` (env: `CODEAGENT_MODEL`) |
-| `base_url` | `http://localhost:11434` | model server (env: `CODEAGENT_BASE_URL`) |
-| `backend` | `ollama` | or `openai` for llama.cpp's server |
-| `num_ctx` / `num_predict` | `4096` / `1024` | context / max reply tokens (smaller = less VRAM) |
-| `num_predict_tests` | `600` | smaller reply cap while writing tests (a rambling reply costs less time) |
-| `temperature` | `0.2` | try `0` if `smoke` is flaky |
-| `retry_temperature_step` / `max_retry_temperature` | `0.05` / `0.4` | retries warm up only slightly: tiny models write nonsense when hot |
-| `max_test_rewrites` | `2` | how many times tests found broken while implementing are rewritten before the step fails |
-| `max_attempts` | `4` | retries per phase before a step is rolled back |
-| `stop_on_failure` | `true` | stop the plan at the first failed step |
-| `step_cooldown_s` | `2.0` | pause after every model call (keeps the laptop cool) |
-| `min_free_mem_mb` / `min_battery_pct` / `max_temp_c` / `min_free_disk_mb` | `1500` / `20` / `88` / `1024` | when to pause |
+| `CODEAGENT_MODEL` | `qwen3.5:0.8b` | name from `ollama list` |
+| `CODEAGENT_BASE_URL` / `CODEAGENT_BACKEND` | `http://localhost:11434` / `ollama` | model server; backend `openai` for llama.cpp's server |
+| `CODEAGENT_THINK` / `CODEAGENT_THINK_LEVEL` | `true` / `high` | reasoning before code (see Thinking) |
+| `CODEAGENT_NUM_CTX` / `CODEAGENT_NUM_PREDICT` | `8192` / `4096` | context / max tokens per call, thinking included |
+| `CODEAGENT_TEMPERATURE` | `0.2` | retries warm up by `RETRY_TEMPERATURE_STEP` (0.05) up to `MAX_RETRY_TEMPERATURE` (0.4) |
+| `CODEAGENT_MAX_ATTEMPTS` | `4` | retries per phase before a step is rolled back |
+| `CODEAGENT_MAX_TEST_REWRITES` | `2` | times tests found broken while implementing are rewritten |
+| `CODEAGENT_STOP_ON_FAILURE` | `true` | stop the plan at the first failed step |
+| `CODEAGENT_STEP_COOLDOWN_S` | `2.0` | pause after every model call (keeps the laptop cool) |
+| `CODEAGENT_MIN_FREE_MEM_MB` / `_MIN_BATTERY_PCT` / `_MAX_TEMP_C` / `_MIN_FREE_DISK_MB` | `1500` / `20` / `88` / `1024` | when to pause |
 
 ## Honest expectations
 
-* The whole system is tested (260+ tests, including real subprocess/HTTP/git end-to-end runs),
-  but against a **scripted stand-in for the model**. How well *your* 0.8B model does is
-  something only `codeagent smoke` and real plans can tell you.
-* A 0.8B model will fail some steps. That is expected and safe: the step is rolled back,
-  the reason is logged, and the plan can be re-run. Smaller steps and clearer examples help most.
-* If it is too weak, point `model` at a bigger local model; nothing else changes.
+* The system is tested with real subprocess/HTTP/git end-to-end runs, but against a **scripted stand-in
+  for the model**. How well *your* model does is something only `codeagent smoke`, `tests/bench.py` and
+  real plans can tell you.
+* A 0.8B model will fail some steps. That is expected and safe: the step is rolled back, the reason is
+  logged, and the plan can be re-run. Smaller steps and clearer examples help most; a bigger local model
+  needs only a different `CODEAGENT_MODEL`.
 
 ## Layout
 
-`plan.py` plan format · `runner.py` the loop · `prompts.py` · `parsing.py` model output ·
-`llm.py` Ollama/OpenAI-compatible client · `shell.py` hardened command runner ·
-`workspace.py` sandboxed files · `git.py` · `resources.py` guard · `state.py` resume + lock ·
-`daemon.py` 24/7 inbox · `cli.py`
+```
+agent.py          config, plan, prompts, log, the agent loop and the CLI: one module on purpose
+tests/            unit + end-to-end tests, example plans (tests/examples/*.json), bench.py
+```
 
-## Broken tests are caught early
-
-A test file that can never run (for example `def test_x(text):` with nothing supplying `text`) would fail
-every implementation the same way. The agent therefore:
-
-- rejects test files whose test functions take parameters nothing provides (no `parametrize`, fixture or
-  `conftest.py` fixture), or that contain no tests, before running them;
-- treats a red run caused by a missing fixture, a syntax error or "no tests ran" as *bad tests* (not a
-  valid red) and asks for new tests; a missing module is still the normal red for a new feature;
-- if the tests turn out to be broken while implementing, rolls the step back and rewrites the tests
-  (up to `max_test_rewrites`) instead of retrying the implementation against tests that cannot pass.
-
-Prompts also tell the model to write no comments or docstrings and to write parameterless tests.
-If `smoke` passes but steps still fail on logic, try a stronger model that fits your GPU
-(for example a 1.5B coder model such as `qwen2.5-coder:1.5b`).
+Background services (a watch-folder daemon, systemd unit) are deliberately not here yet: first the agent has
+to do a task well on its own.
 
 ## Tools around the model
 
@@ -192,37 +166,36 @@ The model is a fast typist that guesses; code does the checking and the tidying.
 
 | Tool | What it does | Switch |
 |---|---|---|
-| Examples as tests | the plan's `[[step.examples]]` become the pytest file; the model never writes tests | `function` + `examples` in the plan |
-| Skeleton mode | the plan's `signature` gives the def line; the harness writes it and `__init__.py`, the model writes only the body (cap `num_predict_body`, default 384 tokens) | `signature` in the plan |
-| Tidy | strips docstrings and comments and re-prints the code in one style (stdlib `ast`) | `tidy_code` (default on) |
-| ruff (optional, `pip install ruff`) | removes unused imports, reports undefined names / redefinitions / syntax errors with line numbers before pytest runs | `use_ruff` (default on, skipped when ruff is missing) |
+| Examples as tests | the plan's `examples` become the pytest file; the model never writes tests | `function` + `examples` in the plan |
+| Skeleton mode | the plan's `signature` gives the def line; the harness writes it and `__init__.py`, the model writes only the body (cap `num_predict_body`) | `signature` in the plan |
+| Tidy | strips docstrings and comments and re-prints the code in one style (stdlib `ast`) | `CODEAGENT_TIDY_CODE` (default on) |
+| ruff (optional, `pip install ruff`) | removes unused imports, reports undefined names / redefinitions / syntax errors with line numbers before pytest runs | `CODEAGENT_USE_RUFF` (default on, skipped when ruff is missing) |
 | Function-defined check | the implementation must really define the function the examples call | automatic |
 | Duplicate / parameter checks | model-written tests with repeated names or parameters nothing provides are rejected | automatic |
 | Plain-language failures | each failing example says `add_item(...) returned X, but it must return Y` instead of a raw pytest diff the model cannot read | automatic |
 | Header-less reply | a single fenced block with no `FILE:` line is used when the step can only have one file | automatic |
 | Never-returns check | an implementation with no `return <value>` is sent back when the examples expect a result | automatic |
 | Repeated-code check | identical code to an earlier failed attempt is not re-run; the next prompt hides the old code and runs a little warmer | automatic |
-| Repeat penalty + stop sequence | `repeat_penalty` (Ollama) fights "same sentence forever" loops; skeleton mode stops at a stray `FILE:` | `repeat_penalty`, config |
+| Repeat penalty + stop sequence | `repeat_penalty` (Ollama) fights "same sentence forever" loops; skeleton mode stops at a stray `FILE:` | `CODEAGENT_REPEAT_PENALTY` |
 
-See `examples/cart.toml` for a step using all of it.
+See `tests/examples/cart.json` for a step using all of it.
 
 ### Small steps beat one big step
 
 A 0.8B model can write a 5-line function from a numbered recipe; it cannot invent the algorithm for a
-compound one. `examples/cart_split.toml` splits the cart into three tiny steps (validate, merge, add), each
-with its algorithm written in plain words. Later steps see earlier files through `context` and call them, and
-each skeleton step adds its re-export to the package `__init__.py` instead of replacing it.
+compound one. `tests/examples/cart_split.json` splits the cart into three tiny steps (validate, merge, add),
+each with its algorithm written in plain words. Later steps see earlier files through `context`, and each
+skeleton step adds its re-export to the package `__init__.py` instead of replacing it.
 
-## Is the model the problem? `codeagent bench`
+## Is the model the problem? `tests/bench.py`
 
 Tests the model with no agent around it: seven small functions asked in plain words (3 basic, 3 medium,
-1 hard = the cart `add_item`), each sampled several times and graded by running the code.
+1 hard), each sampled several times and graded by running the code.
 
 ```bash
-codeagent bench                       # 5 tries per problem, about 10 minutes on a 0.8B model
-codeagent bench --tries 3 --only add slugify add_item
-CODEAGENT_MODEL="qwen2.5-coder:1.5b" codeagent bench      # compare another model
+python tests/bench.py                          # 5 tries per problem
+python tests/bench.py --tries 3 --only add slugify add_item
+CODEAGENT_MODEL="qwen2.5-coder:1.5b" python tests/bench.py     # compare another model
 ```
 
 It ends with a plain verdict: too weak for code, fine on tiny functions only, needs small steps, or capable.
-Every problem is checked against a known-correct solution in the test suite, so a failure means the model.

@@ -2,10 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from codeagent.config import Config
-from codeagent.plan import load_plan
+from agent import Config, load_plan
 
-EXAMPLES = sorted((Path(__file__).resolve().parents[1] / "examples").glob("*.toml"))
+EXAMPLES = sorted((Path(__file__).parent / "examples").glob("*.json"))
 
 
 def test_there_are_examples():

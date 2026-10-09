@@ -1,4 +1,4 @@
-from codeagent.testcheck import check_test_source, diagnose_broken_tests
+from agent import check_test_source, diagnose_broken_tests
 
 
 def test_the_exact_file_from_the_failed_run_is_rejected():

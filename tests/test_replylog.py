@@ -1,6 +1,5 @@
-import os
 
-from codeagent.replylog import ReplyLog
+from agent import ReplyLog
 
 
 def files(root):

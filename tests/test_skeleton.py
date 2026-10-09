@@ -1,29 +1,32 @@
+import json
+
 import pytest
 
-from codeagent.plan import PlanError, parse_plan
-from codeagent.skeleton import assemble_files, assemble_module, init_source, module_path, signature_problem
+from agent import (
+    PlanError,
+    assemble_files,
+    assemble_module,
+    init_source,
+    module_path,
+    parse_plan,
+    signature_problem,
+)
 
-PLAN = '''
-title = "Cart"
-test_command = "python -m pytest -q"
 
-[[step]]
-title = "add"
-description = "add_item"
-commit = "feat: add"
-tests = ["tests/test_add.py"]
-files = ["cart/__init__.py", "cart/engine.py"]
-function = "cart.engine:add_item"
-signature = "add_item(cart, name, price, quantity=1)"
-
-[[step.examples]]
-args = [[], "apple", 1.5]
-expect = [{ name = "apple", price = 1.5, quantity = 1 }]
-'''
+def plan(**step_changes):
+    step = {
+        "title": "add", "description": "add_item", "commit": "feat: add",
+        "tests": ["tests/test_add.py"], "files": ["cart/__init__.py", "cart/engine.py"],
+        "function": "cart.engine:add_item", "signature": "add_item(cart, name, price, quantity=1)",
+        "examples": [{"args": [[], "apple", 1.5], "expect": [{"name": "apple", "price": 1.5, "quantity": 1}]}],
+    }
+    step.update(step_changes)
+    step = {k: v for k, v in step.items() if v is not None}
+    return json.dumps({"title": "Cart", "test_command": "python -m pytest -q", "steps": [step]})
 
 
 def step():
-    return parse_plan(PLAN).steps[0]
+    return parse_plan(plan()).steps[0]
 
 
 def test_signature_is_parsed_onto_the_step():
@@ -45,14 +48,13 @@ def errors_of(text):
 
 
 def test_plan_rejects_bad_signatures_and_stray_files():
-    assert any("must define the function" in e for e in errors_of(PLAN.replace('"add_item(cart', '"other(cart')))
+    assert any("must define the function" in e for e in errors_of(plan(signature="other(cart)")))
     assert any("remove: cart/extra.py" in e for e in errors_of(
-        PLAN.replace('"cart/engine.py"]', '"cart/engine.py", "cart/extra.py"]')))
+        plan(files=["cart/__init__.py", "cart/engine.py", "cart/extra.py"])))
 
 
 def test_signature_needs_function_and_examples():
-    no_fn = PLAN.split("function =")[0] + 'signature = "f(x)"\n'
-    assert any("needs 'function'" in e for e in errors_of(no_fn))
+    assert any("needs 'function'" in e for e in errors_of(plan(function=None, examples=None, signature="f(x)")))
 
 
 def test_bare_body_is_wrapped_in_the_signature():
@@ -84,9 +86,7 @@ def test_init_file_reexports_the_function():
 
 
 def test_nested_package_init_files():
-    nested = PLAN.replace("cart.engine", "a.b.c").replace('"cart/__init__.py", "cart/engine.py"',
-                                                          '"a/__init__.py", "a/b/__init__.py", "a/b/c.py"')
-    s = parse_plan(nested).steps[0]
+    s = parse_plan(plan(function="a.b.c:add_item", files=["a/__init__.py", "a/b/__init__.py", "a/b/c.py"])).steps[0]
     assert init_source(s, "a/__init__.py") == "from .b.c import add_item\n"
     assert init_source(s, "a/b/__init__.py") == "from .c import add_item\n"
 

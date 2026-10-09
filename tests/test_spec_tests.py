@@ -1,37 +1,24 @@
 import ast
+import json
 
-from codeagent.plan import parse_plan
-from codeagent.spec_tests import defined_names, render_tests
+from agent import defined_names, parse_plan, render_tests
 
-PLAN = '''
-title = "Cart"
-test_command = "python -m pytest -q"
+EXAMPLES = [
+    {"args": [[], "apple", 1.5], "expect": [{"name": "apple", "price": 1.5, "quantity": 1}]},
+    {"args": [[], "apple", -1.0], "raises": "ValueError"},
+    {"args": [[], "apple", 1.5], "kwargs": {"quantity": 0}, "raises": "ValueError"},
+]
 
-[[step]]
-title = "add"
-description = "add_item"
-commit = "feat: add"
-tests = ["tests/test_add.py"]
-files = ["cart/__init__.py", "cart/engine.py"]
-function = "cart.engine:add_item"
 
-[[step.examples]]
-args = [[], "apple", 1.5]
-expect = [{ name = "apple", price = 1.5, quantity = 1 }]
-
-[[step.examples]]
-args = [[], "apple", -1.0]
-raises = "ValueError"
-
-[[step.examples]]
-args = [[], "apple", 1.5]
-kwargs = { quantity = 0 }
-raises = "ValueError"
-'''
+def plan(examples=EXAMPLES):
+    return json.dumps({"title": "Cart", "test_command": "python -m pytest -q", "steps": [{
+        "title": "add", "description": "add_item", "commit": "feat: add",
+        "tests": ["tests/test_add.py"], "files": ["cart/__init__.py", "cart/engine.py"],
+        "function": "cart.engine:add_item", "examples": examples}]})
 
 
 def step():
-    return parse_plan(PLAN).steps[0]
+    return parse_plan(plan()).steps[0]
 
 
 def test_rendered_tests_are_valid_python_with_unique_names():
@@ -51,12 +38,13 @@ def test_rendered_tests_call_the_function_exactly_as_the_plan_says():
 
 
 def test_no_pytest_import_when_nothing_raises():
-    plan = parse_plan(PLAN.split("[[step.examples]]")[0] + "[[step.examples]]\nargs = [[], 'a', 1.0]\nexpect = []\n")
-    assert "import pytest" not in render_tests(plan.steps[0])
+    p = parse_plan(plan([{"args": [[], "a", 1.0], "expect": []}]))
+    assert "import pytest" not in render_tests(p.steps[0])
 
 
 def test_rendered_tests_actually_run(tmp_path):
-    import subprocess, sys
+    import subprocess
+    import sys
     (tmp_path / "cart").mkdir()
     (tmp_path / "cart" / "__init__.py").write_text("")
     (tmp_path / "cart" / "engine.py").write_text(
@@ -76,7 +64,7 @@ def test_defined_names():
 
 
 def test_returns_a_value():
-    from codeagent.spec_tests import returns_a_value
+    from agent import returns_a_value
     assert returns_a_value("def f(x):\n    return x + 1\n", "f") is True
     assert returns_a_value("def f(x):\n    x.append(1)\n", "f") is False
     assert returns_a_value("def f(x):\n    return\n", "f") is False
@@ -89,7 +77,8 @@ def test_returns_a_value():
 
 
 def test_a_failing_example_explains_itself_in_plain_words(tmp_path):
-    import subprocess, sys
+    import subprocess
+    import sys
     (tmp_path / "cart").mkdir()
     (tmp_path / "cart" / "__init__.py").write_text("")
     (tmp_path / "cart" / "engine.py").write_text("def add_item(cart, name, price, quantity=1):\n    return cart\n")
@@ -100,6 +89,5 @@ def test_a_failing_example_explains_itself_in_plain_words(tmp_path):
 
 
 def test_messages_survive_quotes_and_braces_in_the_arguments():
-    import ast
-    plan = parse_plan(PLAN.replace('args = [[], "apple", 1.5]\nexpect', 'args = [[], "it\'s {x}", 1.5]\nexpect', 1))
-    ast.parse(render_tests(plan.steps[0]))
+    p = parse_plan(plan([{"args": [[], "it's {x}", 1.5], "expect": []}]))
+    ast.parse(render_tests(p.steps[0]))
