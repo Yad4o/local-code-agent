@@ -2,8 +2,7 @@ import json
 
 import pytest
 
-from codeagent.plan import Plan, Step
-from codeagent.state import RunState, WorkspaceBusy, WorkspaceLock
+from agent import Plan, RunState, Step, WorkspaceBusy, WorkspaceLock
 
 STEP = Step("core", "do the thing", "feat: core", ("tests/t.py",), ("pkg/c.py",))
 PLAN = Plan("My plan", "pytest", None, (STEP,))
@@ -53,10 +52,9 @@ def test_saving_leaves_no_temp_files(tmp_path):
 
 
 def test_lock_prevents_a_second_holder(tmp_path):
-    with WorkspaceLock(tmp_path):
-        with pytest.raises(WorkspaceBusy):
-            with WorkspaceLock(tmp_path):
-                pass
+    with WorkspaceLock(tmp_path), pytest.raises(WorkspaceBusy):
+        with WorkspaceLock(tmp_path):
+            pass
 
 
 def test_lock_is_released_afterwards(tmp_path):
@@ -67,8 +65,7 @@ def test_lock_is_released_afterwards(tmp_path):
 
 
 def test_lock_is_released_after_an_exception(tmp_path):
-    with pytest.raises(RuntimeError):
-        with WorkspaceLock(tmp_path):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), WorkspaceLock(tmp_path):
+        raise RuntimeError("boom")
     with WorkspaceLock(tmp_path):
         pass

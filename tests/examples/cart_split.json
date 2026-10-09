@@ -1,0 +1,235 @@
+{
+  "title": "Shopping Cart Engine (small steps)",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "check_args validates price and quantity",
+      "description": "Create check_args(price, quantity) in cart/checks.py.\n1. If price is less than 0, or quantity is 0 or less, raise ValueError.\n2. Otherwise return True.\n",
+      "commit": "feat: add cart check_args",
+      "tests": [
+        "tests/test_checks.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/checks.py"
+      ],
+      "function": "cart.checks:check_args",
+      "signature": "check_args(price, quantity)",
+      "examples": [
+        {
+          "args": [
+            1.5,
+            1
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            0.0,
+            1
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            -1.0,
+            1
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            1.5,
+            0
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "merge_quantity raises the quantity of one item",
+      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. Start with an empty list called result.\n2. For each item in cart: if item[\"name\"] equals name, append a copy of the item whose quantity is\n   item[\"quantity\"] + quantity; otherwise append the item unchanged.\n3. Return result.\n",
+      "commit": "feat: add cart merge_quantity",
+      "tests": [
+        "tests/test_merge.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/merge.py"
+      ],
+      "function": "cart.merge:merge_quantity",
+      "signature": "merge_quantity(cart, name, quantity)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "apple",
+            2
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 3
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              },
+              {
+                "name": "pear",
+                "price": 2.0,
+                "quantity": 2
+              }
+            ],
+            "pear",
+            1
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            },
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 3
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "kiwi",
+            1
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "add_item adds an item to the cart",
+      "description": "Create add_item(cart, name, price, quantity=1) in cart/engine.py. Use check_args from cart/checks.py and\nmerge_quantity from cart/merge.py (already written, shown below). Return a NEW list; never change the input cart.\n1. Call check_args(price, quantity).\n2. If any item in cart has this name, return merge_quantity(cart, name, quantity).\n3. Otherwise return a new list: all the cart items, then a new dict {\"name\": name, \"price\": price, \"quantity\": quantity}.\n",
+      "commit": "feat: add cart add_item",
+      "tests": [
+        "tests/test_add.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/engine.py"
+      ],
+      "context": [
+        "cart/checks.py",
+        "cart/merge.py"
+      ],
+      "function": "cart.engine:add_item",
+      "signature": "add_item(cart, name, price, quantity=1)",
+      "examples": [
+        {
+          "args": [
+            [],
+            "apple",
+            1.5
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "apple",
+            1.5,
+            2
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 3
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "pear",
+            2.0
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            },
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "apple",
+            -1.0
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            "apple",
+            1.5
+          ],
+          "kwargs": {
+            "quantity": 0
+          },
+          "raises": "ValueError"
+        }
+      ]
+    }
+  ]
+}

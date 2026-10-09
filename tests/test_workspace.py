@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from codeagent.workspace import Workspace, WorkspaceError
+from agent import Workspace, WorkspaceError
 
 
 @pytest.fixture

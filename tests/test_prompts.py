@@ -1,5 +1,4 @@
-from codeagent.plan import Plan, Step
-from codeagent.prompts import SYSTEM, build_impl_prompt, build_tests_prompt
+from agent import SYSTEM, Plan, Step, build_impl_prompt, build_tests_prompt
 
 STEP = Step(
     title="core function",

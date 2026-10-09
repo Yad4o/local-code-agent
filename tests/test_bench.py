@@ -1,8 +1,7 @@
 import pytest
+from bench import PROBLEMS, extract_code, grade, main, run_bench, verdict
 
-from codeagent.bench import PROBLEMS, Problem, extract_code, grade, run_bench, verdict
-from codeagent.cli import main
-from codeagent.config import Config
+from agent import Config, LLMError
 
 REFERENCE = {
     "add": "def add(a, b):\n    return a + b\n",
@@ -94,8 +93,6 @@ def test_only_filters_problems():
 
 
 def test_model_errors_are_counted_not_scored_as_failures():
-    from codeagent.llm import LLMError
-
     class Down:
         def chat(self, *a, **k):
             raise LLMError("server down")
@@ -114,10 +111,10 @@ def test_verdict_levels():
     assert verdict({}) == ["nothing was graded"]
 
 
-def test_cli_bench_runs_and_rejects_unknown_problem(tmp_path):
+def test_bench_cli_runs_and_rejects_unknown_problem(tmp_path):
     lines = []
-    code = main(["bench", "--tries", "1", "--only", "add", "is_even"], out=lines.append,
+    code = main(["--tries", "1", "--only", "add", "is_even"], out=lines.append,
                 llm_factory=lambda c: Scripted({"add", "is_even"}))
     assert code == 0 and any("add" in l and "1/1" in l for l in lines)
     bad = []
-    assert main(["bench", "--only", "nope"], out=bad.append, llm_factory=lambda c: Scripted(set())) == 2
+    assert main(["--only", "nope"], out=bad.append, llm_factory=lambda c: Scripted(set())) == 2

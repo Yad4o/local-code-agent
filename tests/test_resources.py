@@ -1,5 +1,4 @@
-from codeagent.config import Config
-from codeagent.resources import ResourceGuard
+from agent import Config, ResourceGuard
 
 
 def make(tmp_path, *, mem_kb=None, bats=(), temps=(), **cfg_over):

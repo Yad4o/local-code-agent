@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from codeagent.shell import CommandError, run_command
+from agent import CommandError, run_command
 
 ALLOWED = ["python", "python3", "pytest"]
 
