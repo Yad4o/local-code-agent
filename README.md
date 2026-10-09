@@ -198,6 +198,9 @@ The model is a fast typist that guesses; code does the checking and the tidying.
 | ruff (optional, `pip install ruff`) | removes unused imports, reports undefined names / redefinitions / syntax errors with line numbers before pytest runs | `use_ruff` (default on, skipped when ruff is missing) |
 | Function-defined check | the implementation must really define the function the examples call | automatic |
 | Duplicate / parameter checks | model-written tests with repeated names or parameters nothing provides are rejected | automatic |
+| Header-less reply | a single fenced block with no `FILE:` line is used when the step can only have one file | automatic |
+| Never-returns check | an implementation with no `return <value>` is sent back when the examples expect a result | automatic |
+| Repeated-code check | identical code to an earlier failed attempt is not re-run; the next prompt hides the old code and runs a little warmer | automatic |
 | Repeat penalty + stop sequence | `repeat_penalty` (Ollama) fights "same sentence forever" loops; skeleton mode stops at a stray `FILE:` | `repeat_penalty`, config |
 
 See `examples/cart.toml` for a step using all of it.

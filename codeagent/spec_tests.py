@@ -49,3 +49,26 @@ def defined_names(source: str) -> set[str]:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names.update(t.id for t in targets if isinstance(t, ast.Name))
     return names
+
+
+def returns_a_value(source: str, name: str) -> bool | None:
+    """Does function `name` have a path that returns (or yields) something? None = cannot tell."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    fn = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name), None)
+    if fn is None:
+        return None
+    stack = list(fn.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue                                    # a nested function's return is not ours
+        if isinstance(node, ast.Return) and node.value is not None \
+                and not (isinstance(node.value, ast.Constant) and node.value.value is None):
+            return True
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        stack.extend(ast.iter_child_nodes(node))
+    return False

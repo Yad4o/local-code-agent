@@ -72,3 +72,16 @@ def test_defined_names():
     src = "import os\nfrom .a import b as c\nX = 1\ndef f(): pass\nclass K: pass\n"
     assert defined_names(src) == {"os", "c", "X", "f", "K"}
     assert defined_names("def broken(:") == set()
+
+
+def test_returns_a_value():
+    from codeagent.spec_tests import returns_a_value
+    assert returns_a_value("def f(x):\n    return x + 1\n", "f") is True
+    assert returns_a_value("def f(x):\n    x.append(1)\n", "f") is False
+    assert returns_a_value("def f(x):\n    return\n", "f") is False
+    assert returns_a_value("def f(x):\n    return None\n", "f") is False
+    assert returns_a_value("def f(x):\n    yield x\n", "f") is True
+    assert returns_a_value("def f(x):\n    def g():\n        return 1\n    x.append(g)\n", "f") is False
+    assert returns_a_value("def f(x):\n    if x:\n        return 1\n", "f") is True
+    assert returns_a_value("def other(): return 1\n", "f") is None
+    assert returns_a_value("def f(:\n", "f") is None

@@ -29,6 +29,7 @@ class ParseResult:
     blocks: list[FileBlock] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)      # things we quietly fixed (worth logging)
+    anonymous: list[str] = field(default_factory=list)  # fenced blocks that came without any file name
 
 
 def strip_thinking(text: str) -> str:
@@ -80,6 +81,8 @@ def parse_file_blocks(text: str, *, truncated: bool = False) -> ParseResult:
             if m:
                 path, lines = m.group(1), lines[1:]
         if path is None:
+            if any(l.strip() for l in lines):
+                result.anonymous.append("".join(l + "\n" for l in lines))
             return
         found[_norm_path(path)] = "".join(l + "\n" for l in lines)
 
@@ -104,6 +107,8 @@ def parse_file_blocks(text: str, *, truncated: bool = False) -> ParseResult:
         elif FENCE_OPEN.match(line):
             collecting, block_path, lines_acc = True, None, []
 
+    if collecting and block_path is None and not truncated:
+        finish(None, lines_acc)                  # an unclosed block with no name: still counts as anonymous
     if collecting and block_path is not None:
         path = _norm_path(block_path)
         if not truncated:

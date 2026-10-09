@@ -16,14 +16,14 @@ from typing import Callable
 from codeagent import git
 from codeagent.config import Config
 from codeagent.llm import LLMClient, LLMError
-from codeagent.parsing import parse_file_blocks
+from codeagent.parsing import FileBlock, parse_file_blocks
 from codeagent.plan import Plan, PlanError, Step, plan_slug
 from codeagent.prompts import build_impl_prompt, build_tests_prompt
 from codeagent.replylog import ReplyLog
 from codeagent.resources import ResourceGuard
 from codeagent.shell import CommandResult, run_command
 from codeagent.skeleton import BODY_STOP, assemble_files, module_path
-from codeagent.spec_tests import defined_names, render_tests
+from codeagent.spec_tests import defined_names, render_tests, returns_a_value
 from codeagent.tidy import ruff_fix, ruff_problems, tidy_python
 from codeagent.state import RunState, WorkspaceLock
 from codeagent.testcheck import check_test_source, diagnose_broken_tests
@@ -205,13 +205,19 @@ class Runner:
 
     def _impl_phase(self, step: Step, tests: dict[str, str], output: str) -> None:
         feedback = None
+        seen: dict[str, int] = {}                        # code we already tried -> attempt number
+        fresh = False                                    # next prompt hides the previous code (anti-anchoring)
+        repeats = 0                                      # how many times the model repeated itself
         for n in range(1, self.cfg.max_attempts + 1):
-            existing = self._read_many((*step.files, *step.context))
+            existing = {p: None for p in (*step.files, *step.context)} if fresh \
+                else self._read_many((*step.files, *step.context))
+
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
                                                self.cfg.max_context_chars, output, feedback),
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
-                             stop=BODY_STOP if step.signature else None)
+                             stop=BODY_STOP if step.signature else None, bump=0.15 * repeats)
+            fresh = False
             if step.signature:                       # skeleton mode: the model wrote only the body
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
                 if not problems:
@@ -226,6 +232,15 @@ class Runner:
                 feedback = _bullets(problems)
                 self.log(f"   impl attempt {n}: {problems[0]}")
                 continue
+            key = "\n".join(f"{p}\n{files[p]}" for p in sorted(files))
+            if key in seen:                              # a tiny model often copies its last answer verbatim
+                repeats += 1
+                fresh = True
+                feedback = (f"this is identical to your attempt {seen[key]}, which already failed the tests. "
+                            f"Write a DIFFERENT solution; do not copy your earlier code.")
+                self.log(f"   impl attempt {n}: same code as attempt {seen[key]}; not re-running, asking for a different one")
+                continue
+            seen[key] = n
             self._write(files)
             self._write(tests)
             problems = self._static_check(list(files))
@@ -246,11 +261,12 @@ class Runner:
         raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
 
     # ------------------------------------------------------------------ pieces
-    def _retry_temperature(self, attempt: int) -> float:
+    def _retry_temperature(self, attempt: int, bump: float = 0.0) -> float:
         """Attempt 1 uses the configured temperature; retries warm up only a little, and never past
         the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
         ceiling = max(self.cfg.temperature, self.cfg.max_retry_temperature)
-        return min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+        t = min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+        return min(t + bump, max(ceiling, 0.7)) if bump else t     # repeating itself earns a warmer retry
 
     def _static_check(self, paths: list[str]) -> list[str]:
         """ruff, if installed: remove unused imports, then report undefined names before running anything."""
@@ -265,8 +281,13 @@ class Runner:
             return []
         module, name = step.function.split(":")
         path = module.replace(".", "/") + ".py"
-        if path in files and name not in defined_names(files[path]):
+        if path not in files:
+            return []
+        if name not in defined_names(files[path]):
             return [f"{path} does not define `{name}`; write `def {name}(...)` at the top level of {path}"]
+        if any(not e.raises for e in step.examples) and returns_a_value(files[path], name) is False:
+            return [f"`{name}` never returns a value, but the examples expect it to return a result; "
+                    f"end it with `return <the result>`"]
         return []
 
     def _lint_tests(self, files: dict[str, str]) -> list[str]:
@@ -283,7 +304,7 @@ class Runner:
         return out
 
     def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int,
-             num_predict: int | None = None, stop: list[str] | None = None) -> str:
+             num_predict: int | None = None, stop: list[str] | None = None, bump: float = 0.0) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
         ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
@@ -292,7 +313,7 @@ class Runner:
             if self.should_stop():
                 raise _Pause("stop requested")
             raise _Pause("system resources stayed too low; will retry later")
-        temperature = self._retry_temperature(attempt)
+        temperature = self._retry_temperature(attempt, bump)
         started = time.monotonic()
         try:
             self.attempts += 1
@@ -315,6 +336,10 @@ class Runner:
         for note in parsed.notes:
             self.log(f"   fixed up: {note}")
         problems = list(parsed.problems)
+        targets = [p for p in allowed if not p.endswith("__init__.py")]
+        if not parsed.blocks and len(parsed.anonymous) == 1 and len(targets) == 1:
+            parsed.blocks = [FileBlock(targets[0], parsed.anonymous[0])]     # only one file is possible: no header needed
+            self.log(f"   fixed up: the reply had no FILE header; used its only code block as {targets[0]}")
         if not parsed.blocks and not problems:
             return {}, ["your reply contained no FILE blocks; reply only with: FILE: <path> then a fenced code block"]
         got: dict[str, str] = {}
