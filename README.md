@@ -212,3 +212,17 @@ A 0.8B model can write a 5-line function from a numbered recipe; it cannot inven
 compound one. `examples/cart_split.toml` splits the cart into three tiny steps (validate, merge, add), each
 with its algorithm written in plain words. Later steps see earlier files through `context` and call them, and
 each skeleton step adds its re-export to the package `__init__.py` instead of replacing it.
+
+## Is the model the problem? `codeagent bench`
+
+Tests the model with no agent around it: seven small functions asked in plain words (3 basic, 3 medium,
+1 hard = the cart `add_item`), each sampled several times and graded by running the code.
+
+```bash
+codeagent bench                       # 5 tries per problem, about 10 minutes on a 0.8B model
+codeagent bench --tries 3 --only add slugify add_item
+CODEAGENT_MODEL="qwen2.5-coder:1.5b" codeagent bench      # compare another model
+```
+
+It ends with a plain verdict: too weak for code, fine on tiny functions only, needs small steps, or capable.
+Every problem is checked against a known-correct solution in the test suite, so a failure means the model.
