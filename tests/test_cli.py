@@ -204,3 +204,14 @@ def test_run_live_prints_the_prompt_and_the_raw_reply_but_saves_nothing_extra(pl
     lines.clear()
     run_cli(["run", str(plan), "--workspace", str(tmp_path / "quiet")], lines, FakeLLM(TEST_CORE, INIT + CORE_OK))
     assert "==== PROMPT:" not in capsys.readouterr().out                    # off unless asked for
+
+
+def test_live_printer_shows_a_note_in_the_middle_of_a_stream():
+    from agent import LivePrinter
+    out = []
+    live = LivePrinter(write=out.append, color=False)
+    live.chunk("thinking", "loop loop")
+    live.chunk("note", "the thinking started repeating itself; asked again with thinking off")
+    live.chunk("content", "FILE: a.py")
+    text = "".join(out)
+    assert text.index("loop loop") < text.index(">>> the thinking started repeating itself") < text.index("FILE: a.py")

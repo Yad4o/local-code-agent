@@ -50,7 +50,7 @@ def test_run_builds_a_project_end_to_end(tmp_path, stub, env, plan):
     assert log.strip() == "feat: add slugify core function"
     posts = [b for m, p, b in stub.requests if m == "POST"]
     assert len(posts) == 2
-    assert all(p["model"] == "fake:0.8b" and p["think"] is True and p["stream"] is False for p in posts)
+    assert all(p["model"] == "fake:0.8b" and p["think"] is True and p["stream"] is True for p in posts)
 
 
 def test_thinking_can_be_switched_off_from_the_environment(tmp_path, stub, env, plan):

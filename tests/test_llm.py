@@ -30,7 +30,7 @@ def test_ollama_chat_sends_expected_payload_and_returns_content(stub):
     assert (method, path) == ("POST", "/api/chat")
     assert body["model"] == "m:1b"
     assert body["messages"] == MSGS
-    assert body["stream"] is False
+    assert body["stream"] is True                      # streamed while thinking, so a looping reasoning can be cut off
     assert body["think"] is True                       # agentic coding: the model reasons before it writes
     assert body["keep_alive"] == "5m"
     assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1, "repeat_penalty": 1.1}
@@ -258,11 +258,10 @@ def test_streaming_shows_thinking_and_answer_as_they_arrive_and_returns_the_usua
     assert stub.requests[0][2]["stream"] is True
 
 
-def test_not_streaming_unless_asked(stub):
+def test_not_streamed_when_not_thinking_and_nobody_is_watching(stub):
     stub.responses = [ollama_reply("a")]
-    make_client(cfg_for(stub)).chat(MSGS)
+    make_client(cfg_for(stub, think=False)).chat(MSGS)
     assert stub.requests[0][2]["stream"] is False
-
 
 def test_streamed_cut_off_and_empty_answers_are_handled_like_normal_ones(stub):
     stub.responses = [ndjson({"message": {"content": "x = 1"}, "done": False},
@@ -278,3 +277,55 @@ def test_error_line_in_the_stream_is_an_llm_error(stub):
     stub.responses = [ndjson({"error": "model runner crashed"})]
     with pytest.raises(LLMError, match="model runner crashed"):
         make_client(cfg_for(stub)).chat(MSGS, on_token=lambda *a: None)
+
+
+# --- thinking loops ----------------------------------------------------------
+
+def stream_of(*thoughts, answer=None):
+    chunks = [{"message": {"thinking": t}, "done": False} for t in thoughts]
+    if answer is not None:
+        chunks.append({"message": {"content": answer}, "done": False})
+    chunks.append({"message": {"content": ""}, "done": True, "done_reason": "stop"})
+    return ndjson(*chunks)
+
+
+LOOP = "So the issue is that when an item does not match the name it is excluded from the result.\n"
+
+
+def test_guard_flags_a_reasoning_that_repeats_itself_or_runs_too_long():
+    from agent import ThinkGuard
+    g = ThinkGuard(max_chars=10_000)
+    assert g.feed(LOOP) is None and g.feed(LOOP) is None
+    assert "repeating itself" in g.feed(LOOP)
+    short = ThinkGuard(max_chars=50)
+    assert "passed 50 characters" in short.feed("x" * 51)
+    ok = ThinkGuard(max_chars=10_000)
+    assert all(ok.feed(f"step {i}: a perfectly normal and different line of reasoning number {i}\n") is None
+               for i in range(30))
+    assert ok.feed("def f(a):\n") is None and ok.feed("def f(a):\n") is None and ok.feed("def f(a):\n") is None   # short lines are fine
+
+
+def test_a_looping_reasoning_is_cut_off_and_asked_again_without_thinking(stub):
+    stub.responses = [stream_of(*[LOOP] * 10), (200, {"message": {"content": "FILE: a.py\n```python\nx = 1\n```"}})]
+    seen = []
+    reply = make_client(cfg_for(stub)).chat(MSGS, on_token=lambda k, t: seen.append(k))
+    assert "x = 1" in reply and "repeating itself" in reply.note and "thinking off" in reply.note
+    assert [r[2]["think"] for r in stub.requests] == [True, False]
+    assert "note" in seen
+    assert sum(k == "thinking" for k in seen) == 3                 # stopped reading at the third repeat
+
+
+def test_thinking_only_reply_falls_back_but_a_good_answer_does_not(stub):
+    stub.responses = [stream_of("hmm"), (200, {"message": {"content": "answer"}})]
+    assert make_client(cfg_for(stub)).chat(MSGS) == "answer"
+    stub.requests.clear()
+    stub.responses = [stream_of("fine", answer="direct answer")]
+    reply = make_client(cfg_for(stub)).chat(MSGS)
+    assert reply == "direct answer" and reply.note == "" and len(stub.requests) == 1
+
+
+def test_fallback_can_be_switched_off_and_still_explains_itself(stub):
+    stub.responses = [stream_of(*[LOOP] * 10)]
+    with pytest.raises(LLMError, match="no answer.*repeating itself"):
+        make_client(cfg_for(stub, think_fallback=False)).chat(MSGS)
+    assert len(stub.requests) == 1

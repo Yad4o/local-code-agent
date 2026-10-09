@@ -54,6 +54,11 @@ again, finished steps are skipped), `4` workspace busy.
 
 Agentic coding needs the model to reason before it writes code, so `think` is **on** by default
 (`think_level = high` for models that take a level, such as gpt-oss; other models take on/off).
+Small models sometimes loop in their reasoning, repeating the same paragraphs until the token limit.
+The agent watches the reasoning as it streams; if it repeats itself or passes `CODEAGENT_THINK_MAX_CHARS`
+(6000) without an answer, it cuts the call off and asks again with thinking off (`CODEAGENT_THINK_FALLBACK=false`
+to disable). The log and `--live` view say when that happened.
+
 Thinking tokens count against `num_predict`, so the defaults are larger (4096 / 2048) than for a
 non-thinking model. If a reply ends with "used all N tokens thinking", raise `CODEAGENT_NUM_PREDICT`
 or lower `CODEAGENT_THINK_LEVEL`. Switch it off with `CODEAGENT_THINK=false`.

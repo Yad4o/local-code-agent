@@ -487,6 +487,8 @@ class Config:
     max_retry_temperature: float = 0.4          # retries never go hotter than this (or `temperature`, if higher)
     keep_alive: str = "30m"                     # keep model loaded between calls
     request_timeout: float = 900.0              # thinking makes replies slower
+    think_max_chars: int = 6000                 # thinking longer than this without an answer is cut off
+    think_fallback: bool = True                 # after a cut-off or a thinking-only reply, ask again with thinking off
     allow_remote_llm: bool = False              # False = refuse any non-local base_url (offline guarantee)
     # --- agent loop ---
     max_attempts: int = 4                       # tries per phase (tests / implementation)
@@ -1383,6 +1385,7 @@ class Reply(str):
     """The model's text. `.truncated` is True if it hit the token limit (it was cut off)."""
 
     truncated: bool = False
+    note: str = ""                      # something the caller should log (e.g. "thinking looped; asked again without it")
 
 
 def _reply(text: str, truncated: bool) -> Reply:
@@ -1416,6 +1419,28 @@ def _check_url(cfg: Config) -> str:
     return url
 
 
+class ThinkGuard:
+    """Watches a model's reasoning as it streams and says when to give up: it got too long, or it started
+    repeating itself (small models often loop in their reasoning until the token limit)."""
+
+    def __init__(self, max_chars: int, repeat_limit: int = 3, min_line: int = 40):
+        self.max_chars, self.repeat_limit, self.min_line = max_chars, repeat_limit, min_line
+        self.chars, self.pending, self.seen = 0, "", {}
+
+    def feed(self, text: str) -> str | None:
+        self.chars += len(text)
+        if self.chars > self.max_chars:
+            return f"the thinking passed {self.max_chars} characters without an answer"
+        *lines, self.pending = (self.pending + text).split("\n")
+        for line in lines:
+            key = " ".join(line.split())
+            if len(key) >= self.min_line:
+                self.seen[key] = self.seen.get(key, 0) + 1
+                if self.seen[key] >= self.repeat_limit:
+                    return f"the thinking started repeating itself ({key[:50]!r}...)"
+        return None
+
+
 class _BaseClient:
     def __init__(self, cfg: Config, *, sleep: Callable[[float], None] = time.sleep, retries: int = 2):
         self.cfg = cfg
@@ -1423,8 +1448,8 @@ class _BaseClient:
         self.sleep = sleep
         self.retries = retries
 
-    def _request(self, path: str, payload: dict | None,
-                 on_chunk: Callable[[str, str], None] | None = None) -> dict:
+    def _request(self, path: str, payload: dict | None, *, stream: bool = False,
+                 on_chunk: Callable[[str, str], None] | None = None, guard: ThinkGuard | None = None) -> dict:
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(
             self.base + path, data=data, method="POST" if payload is not None else "GET",
@@ -1436,8 +1461,8 @@ class _BaseClient:
                 self.sleep(2.0 * attempt)                 # backoff: 2s, 4s, ...
             try:
                 with urllib.request.urlopen(req, timeout=self.cfg.request_timeout) as resp:
-                    if on_chunk:
-                        return self._read_stream(resp, on_chunk)
+                    if stream:
+                        return self._read_stream(resp, on_chunk, guard)
                     raw = resp.read()
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", "replace")[:300]
@@ -1467,9 +1492,10 @@ class _BaseClient:
         raise last  # type: ignore[misc]
 
     @staticmethod
-    def _read_stream(resp, on_chunk: Callable[[str, str], None]) -> dict:
-        """Read Ollama's line-by-line stream, show each piece as it arrives, return the usual one-piece reply."""
-        content, thinking, last = [], [], {}
+    def _read_stream(resp, on_chunk: Callable[[str, str], None] | None, guard: ThinkGuard | None) -> dict:
+        """Read Ollama's line-by-line stream, show each piece as it arrives, return the usual one-piece reply.
+        If the guard says the reasoning is going nowhere, stop reading: closing the connection stops the model."""
+        content, thinking, last, aborted = [], [], {}, None
         for line in resp:
             if not line.strip():
                 continue
@@ -1482,13 +1508,18 @@ class _BaseClient:
             msg = chunk.get("message") or {}
             if msg.get("thinking"):
                 thinking.append(msg["thinking"])
-                on_chunk("thinking", msg["thinking"])
+                if on_chunk:
+                    on_chunk("thinking", msg["thinking"])
+                if guard and not content and (aborted := guard.feed(msg["thinking"])):
+                    break
             if msg.get("content"):
                 content.append(msg["content"])
-                on_chunk("content", msg["content"])
+                if on_chunk:
+                    on_chunk("content", msg["content"])
             last = chunk
         return {"message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking)},
-                "done_reason": last.get("done_reason"), "eval_count": last.get("eval_count"), "done": last.get("done")}
+                "done_reason": last.get("done_reason"), "eval_count": last.get("eval_count"), "done": last.get("done"),
+                "aborted": aborted}
 
     @staticmethod
     def _finish(text, truncated: bool = False) -> Reply:
@@ -1514,42 +1545,59 @@ def _cut_at_stop(text: str, stop: list[str] | None) -> str:
 
 
 class OllamaClient(_BaseClient):
-    def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None, stop: list[str] | None = None,
-             on_token: Callable[[str, str], None] | None = None) -> Reply:
+    def _call(self, messages, think, temperature, num_predict, stop, on_token) -> tuple[str, str, dict, dict]:
         c = self.cfg
-        think = think_value(c)
         options = {"num_ctx": c.num_ctx,
                    "num_predict": num_predict if num_predict is not None else c.num_predict,
                    "temperature": temperature if temperature is not None else c.temperature,
                    "repeat_penalty": c.repeat_penalty}
         if stop and not think:
             options["stop"] = stop      # while thinking, the model's reasoning can contain the marker and end the reply early
+        stream = on_token is not None or bool(think)
         data = self._request("/api/chat", {
-            "model": c.model, "messages": messages, "stream": on_token is not None,
+            "model": c.model, "messages": messages, "stream": stream,
             "think": think,
             "keep_alive": c.keep_alive,
             "options": options,
-        }, on_chunk=on_token)
+        }, stream=stream, on_chunk=on_token, guard=ThinkGuard(c.think_max_chars) if think else None)
         try:
             msg = data["message"]
             content = _cut_at_stop(str(msg.get("content") or ""), stop)
-            reason = data.get("done_reason")
-            if not strip_thinking(content):
-                thinking = str(msg.get("thinking") or "")
-                raise LLMError(
-                    f"the model sent no answer (think={think!r}, done_reason={reason!r}, "
-                    f"{data.get('eval_count', '?')} tokens, num_predict={options['num_predict']}, "
-                    f"answer chars={len(content)}, thinking chars={len(thinking)}"
-                    + (f", thinking ends: {thinking[-160:]!r}" if thinking else "")
-                    + (", content starts: " + repr(content[:160]) if content.strip() else "") + "). "
-                    + ("It ran out of tokens while thinking: raise CODEAGENT_NUM_PREDICT or lower CODEAGENT_THINK_LEVEL."
-                       if reason == "length" else
-                       "It stopped on its own before answering: this model may not handle think=true "
-                       "(try CODEAGENT_THINK=false, or check `ollama show <model>` for thinking support)."))
-            return self._finish(content, reason == "length")
+            return content, str(msg.get("thinking") or ""), data, options
         except (KeyError, TypeError, AttributeError) as e:
             raise LLMError("unexpected response shape from Ollama") from e
+
+    def chat(self, messages: list[dict], *, temperature: float | None = None,
+             num_predict: int | None = None, stop: list[str] | None = None,
+             on_token: Callable[[str, str], None] | None = None) -> Reply:
+        think = think_value(self.cfg)
+        content, thinking, data, options = self._call(messages, think, temperature, num_predict, stop, on_token)
+        note = ""
+        if think and not strip_thinking(content) and self.cfg.think_fallback:
+            why = data.get("aborted") or "the model stopped without an answer after thinking"
+            note = f"{why}; asked again with thinking off"
+            if on_token:
+                on_token("note", note)
+            first = (data, thinking)
+            content, thinking, data, options = self._call(messages, False, temperature, num_predict, stop, on_token)
+            if not strip_thinking(content):
+                data, thinking = first
+        reason = data.get("done_reason")
+        if not strip_thinking(content):
+            raise LLMError(
+                f"the model sent no answer (think={think!r}, done_reason={reason!r}, "
+                f"{data.get('eval_count', '?')} tokens, num_predict={options['num_predict']}, "
+                f"answer chars={len(content)}, thinking chars={len(thinking)}"
+                + (f", cut off: {data['aborted']}" if data.get("aborted") else "")
+                + (f", thinking ends: {thinking[-160:]!r}" if thinking else "")
+                + (", content starts: " + repr(content[:160]) if content.strip() else "") + "). "
+                + ("It ran out of tokens while thinking: raise CODEAGENT_NUM_PREDICT or lower CODEAGENT_THINK_LEVEL."
+                   if reason == "length" else
+                   "It stopped on its own before answering: this model may not handle think=true "
+                   "(try CODEAGENT_THINK=false, or check `ollama show <model>` for thinking support)."))
+        reply = self._finish(content, reason == "length")
+        reply.note = note
+        return reply
 
 
 class OpenAIClient(_BaseClient):
@@ -1716,6 +1764,10 @@ class LivePrinter:
             self.write(self._paint(f"[{m['role']}]", "36") + "\n" + str(m["content"]).rstrip() + "\n")
 
     def chunk(self, kind: str, text: str) -> None:
+        if kind == "note":
+            self.write(("\n" if self.kind else "") + self._paint(f">>> {text}", "1;31") + "\n")
+            self.kind = None
+            return
         self.streamed = True
         if kind != self.kind:
             self.kind = kind
@@ -2035,6 +2087,8 @@ class Runner:
         truncated = bool(getattr(text, "truncated", False))
         self.replies.save(step.title, phase, attempt, str(text), seconds=seconds, truncated=truncated,
                           temperature=temperature)
+        if getattr(text, "note", ""):
+            self.log(f"   {text.note}")
         self.log(f"   model replied in {seconds:.0f}s ({len(text)} chars)"
                  + (" - CUT OFF at the token limit" if truncated else ""))
         self.sleep(self.cfg.step_cooldown_s)              # let the laptop breathe
