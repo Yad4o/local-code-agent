@@ -1728,6 +1728,41 @@ class LivePrinter:
         self.kind = None
 
 
+class Transcript:
+    """Every prompt sent to the model and every reply, in one readable file (.codeagent/transcript.md).
+    Thinking is included when the reply was streamed (run --live). Writing here must never crash the agent."""
+
+    def __init__(self, root: str | Path):
+        self.path = Path(root) / ".codeagent" / "transcript.md"
+        self._thinking: list[str] = []
+
+    def _append(self, text: str) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(text)
+        except OSError:
+            pass
+
+    def prompt(self, messages: list[dict], label: str) -> None:
+        self._thinking = []
+        body = "".join(f"[{m['role']}]\n{str(m['content']).rstrip()}\n\n" for m in messages)
+        self._append(f"\n==== PROMPT: {label} ({time.strftime('%Y-%m-%d %H:%M:%S')}) ====\n{body}")
+
+    def chunk(self, kind: str, text: str) -> None:
+        if kind == "thinking":
+            self._thinking.append(text)
+
+    def reply(self, text: str, *, seconds: float, truncated: bool, temperature: float) -> None:
+        out = ""
+        if self._thinking:
+            out += f"==== MODEL THINKING ====\n{''.join(self._thinking).rstrip()}\n\n"
+        out += (f"==== MODEL ANSWER (raw) ====\n# seconds: {seconds:.1f}\n# truncated: {'yes' if truncated else 'no'}\n"
+                f"# temperature: {temperature:g}\n{text.rstrip()}\n==== END ====\n")
+        self._thinking = []
+        self._append(out)
+
+
 class _Pause(Exception):
     """Not the model's fault (server down, low resources, stop requested): retry later."""
 
@@ -1793,6 +1828,7 @@ class Runner:
         self.live = live
         self.attempts = 0
         self.replies = ReplyLog(ws.root)
+        self.transcript = Transcript(ws.root)
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunReport:
@@ -2020,9 +2056,11 @@ class Runner:
         try:
             self.attempts += 1
             extra = {"stop": stop} if stop else {}
+            label = f"{step.title} / {phase} / attempt {attempt}"
+            self.transcript.prompt(messages, label)
             if self.live:
-                self.live.prompt(messages, f"{step.title} / {phase} / attempt {attempt}")
-                extra["on_token"] = self.live.chunk
+                self.live.prompt(messages, label)
+                extra["on_token"] = lambda kind, piece: (self.live.chunk(kind, piece), self.transcript.chunk(kind, piece))
             text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict, **extra)
             if self.live and not self.live.streamed:        # a backend that does not stream: show the whole reply now
                 self.live.chunk("content", str(text))
@@ -2035,6 +2073,7 @@ class Runner:
         truncated = bool(getattr(text, "truncated", False))
         self.replies.save(step.title, phase, attempt, str(text), seconds=seconds, truncated=truncated,
                           temperature=temperature)
+        self.transcript.reply(str(text), seconds=seconds, truncated=truncated, temperature=temperature)
         self.log(f"   model replied in {seconds:.0f}s ({len(text)} chars)"
                  + (" - CUT OFF at the token limit" if truncated else ""))
         self.sleep(self.cfg.step_cooldown_s)              # let the laptop breathe

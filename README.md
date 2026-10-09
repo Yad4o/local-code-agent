@@ -107,6 +107,14 @@ codeagent run plan.json --workspace ~/agent-projects/demo --live
 Without `--live`, the log still prints `asking the model (...)` before every call, so a long
 reasoning pause is not mistaken for a hang.
 
+**Everything in one file:** every run (with or without `--live`) appends each prompt and the model's
+raw reply to `<workspace>/.codeagent/transcript.md`, in order, with seconds / cut-off / temperature.
+The model's thinking is included too when you run with `--live` (that is when it is streamed).
+
+```bash
+less $W/.codeagent/transcript.md
+```
+
 
 ```bash
 W=~/agent-projects/demo                                   # your --workspace
