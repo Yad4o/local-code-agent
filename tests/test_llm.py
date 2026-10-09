@@ -235,3 +235,46 @@ def test_openai_stop_sequences(stub):
     stub.responses = [openai_reply("x")]
     make_client(cfg_for(stub, backend="openai")).chat(MSGS, stop=["\nFILE:"])
     assert stub.requests[0][2]["stop"] == ["\nFILE:"]
+
+
+# --- live streaming ---------------------------------------------------------
+
+def ndjson(*chunks):
+    import json
+    return (200, "\n".join(json.dumps(c) for c in chunks) + "\n")
+
+
+def test_streaming_shows_thinking_and_answer_as_they_arrive_and_returns_the_usual_reply(stub):
+    stub.responses = [ndjson(
+        {"message": {"role": "assistant", "content": "", "thinking": "hmm "}, "done": False},
+        {"message": {"role": "assistant", "content": "", "thinking": "ok"}, "done": False},
+        {"message": {"role": "assistant", "content": "def f(): "}, "done": False},
+        {"message": {"role": "assistant", "content": "pass"}, "done": False},
+        {"message": {"role": "assistant", "content": ""}, "done": True, "done_reason": "stop", "eval_count": 9})]
+    seen = []
+    reply = make_client(cfg_for(stub)).chat(MSGS, on_token=lambda kind, text: seen.append((kind, text)))
+    assert reply == "def f(): pass" and reply.truncated is False
+    assert seen == [("thinking", "hmm "), ("thinking", "ok"), ("content", "def f(): "), ("content", "pass")]
+    assert stub.requests[0][2]["stream"] is True
+
+
+def test_not_streaming_unless_asked(stub):
+    stub.responses = [ollama_reply("a")]
+    make_client(cfg_for(stub)).chat(MSGS)
+    assert stub.requests[0][2]["stream"] is False
+
+
+def test_streamed_cut_off_and_empty_answers_are_handled_like_normal_ones(stub):
+    stub.responses = [ndjson({"message": {"content": "x = 1"}, "done": False},
+                             {"message": {"content": ""}, "done": True, "done_reason": "length"})]
+    assert make_client(cfg_for(stub)).chat(MSGS, on_token=lambda *a: None).truncated is True
+    stub.responses = [ndjson({"message": {"thinking": "still thinking"}, "done": False},
+                             {"message": {"content": ""}, "done": True, "done_reason": "stop"})]
+    with pytest.raises(LLMError, match="no answer.*still thinking"):
+        make_client(cfg_for(stub)).chat(MSGS, on_token=lambda *a: None)
+
+
+def test_error_line_in_the_stream_is_an_llm_error(stub):
+    stub.responses = [ndjson({"error": "model runner crashed"})]
+    with pytest.raises(LLMError, match="model runner crashed"):
+        make_client(cfg_for(stub)).chat(MSGS, on_token=lambda *a: None)

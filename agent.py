@@ -1393,7 +1393,8 @@ def _reply(text: str, truncated: bool) -> Reply:
 
 class LLMClient(Protocol):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None, stop: list[str] | None = None) -> str: ...
+             num_predict: int | None = None, stop: list[str] | None = None,
+             on_token: Callable[[str, str], None] | None = None) -> str: ...
 
 
 def _check_url(cfg: Config) -> str:
@@ -1422,7 +1423,8 @@ class _BaseClient:
         self.sleep = sleep
         self.retries = retries
 
-    def _request(self, path: str, payload: dict | None) -> dict:
+    def _request(self, path: str, payload: dict | None,
+                 on_chunk: Callable[[str, str], None] | None = None) -> dict:
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(
             self.base + path, data=data, method="POST" if payload is not None else "GET",
@@ -1434,6 +1436,8 @@ class _BaseClient:
                 self.sleep(2.0 * attempt)                 # backoff: 2s, 4s, ...
             try:
                 with urllib.request.urlopen(req, timeout=self.cfg.request_timeout) as resp:
+                    if on_chunk:
+                        return self._read_stream(resp, on_chunk)
                     raw = resp.read()
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", "replace")[:300]
@@ -1463,6 +1467,30 @@ class _BaseClient:
         raise last  # type: ignore[misc]
 
     @staticmethod
+    def _read_stream(resp, on_chunk: Callable[[str, str], None]) -> dict:
+        """Read Ollama's line-by-line stream, show each piece as it arrives, return the usual one-piece reply."""
+        content, thinking, last = [], [], {}
+        for line in resp:
+            if not line.strip():
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise LLMError(f"model server sent invalid JSON: {line[:200]!r}") from e
+            if chunk.get("error"):
+                raise LLMError(f"model server error: {chunk['error']}")
+            msg = chunk.get("message") or {}
+            if msg.get("thinking"):
+                thinking.append(msg["thinking"])
+                on_chunk("thinking", msg["thinking"])
+            if msg.get("content"):
+                content.append(msg["content"])
+                on_chunk("content", msg["content"])
+            last = chunk
+        return {"message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking)},
+                "done_reason": last.get("done_reason"), "eval_count": last.get("eval_count"), "done": last.get("done")}
+
+    @staticmethod
     def _finish(text, truncated: bool = False) -> Reply:
         if not isinstance(text, str):
             raise LLMError("unexpected response shape from the model server")
@@ -1487,7 +1515,8 @@ def _cut_at_stop(text: str, stop: list[str] | None) -> str:
 
 class OllamaClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None, stop: list[str] | None = None) -> Reply:
+             num_predict: int | None = None, stop: list[str] | None = None,
+             on_token: Callable[[str, str], None] | None = None) -> Reply:
         c = self.cfg
         think = think_value(c)
         options = {"num_ctx": c.num_ctx,
@@ -1497,11 +1526,11 @@ class OllamaClient(_BaseClient):
         if stop and not think:
             options["stop"] = stop      # while thinking, the model's reasoning can contain the marker and end the reply early
         data = self._request("/api/chat", {
-            "model": c.model, "messages": messages, "stream": False,
+            "model": c.model, "messages": messages, "stream": on_token is not None,
             "think": think,
             "keep_alive": c.keep_alive,
             "options": options,
-        })
+        }, on_chunk=on_token)
         try:
             msg = data["message"]
             content = _cut_at_stop(str(msg.get("content") or ""), stop)
@@ -1525,7 +1554,8 @@ class OllamaClient(_BaseClient):
 
 class OpenAIClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None, stop: list[str] | None = None) -> Reply:
+             num_predict: int | None = None, stop: list[str] | None = None,
+             on_token: Callable[[str, str], None] | None = None) -> Reply:       # on_token: not streamed on this backend
         c = self.cfg
         payload = {
             "model": c.model, "messages": messages, "stream": False,
@@ -1666,6 +1696,38 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
 # Anything that goes wrong rolls the step's files back to how they were.
 # ==========================================================================
 
+class LivePrinter:
+    """The prompt sent to the model and its raw output as it is generated, in the terminal only.
+    Nothing here is written to the log file or the replies folder."""
+
+    def __init__(self, write: Callable[[str], None] | None = None, color: bool | None = None):
+        self.write = write or (lambda text: (sys.stdout.write(text), sys.stdout.flush()))
+        self.color = sys.stdout.isatty() if color is None else color
+        self.kind: str | None = None
+        self.streamed = False
+
+    def _paint(self, text: str, code: str) -> str:
+        return f"\x1b[{code}m{text}\x1b[0m" if self.color else text
+
+    def prompt(self, messages: list[dict], label: str) -> None:
+        self.kind, self.streamed = None, False
+        self.write("\n" + self._paint(f"==== PROMPT: {label} ====", "1;36") + "\n")
+        for m in messages:
+            self.write(self._paint(f"[{m['role']}]", "36") + "\n" + str(m["content"]).rstrip() + "\n")
+
+    def chunk(self, kind: str, text: str) -> None:
+        self.streamed = True
+        if kind != self.kind:
+            self.kind = kind
+            title, code = ("MODEL THINKING", "1;33") if kind == "thinking" else ("MODEL ANSWER (raw)", "1;32")
+            self.write("\n" + self._paint(f"==== {title} ====", code) + "\n")
+        self.write(self._paint(text, "2") if kind == "thinking" else text)
+
+    def end(self) -> None:
+        self.write(("\n" if self.kind else "") + self._paint("==== END ====", "1;35") + "\n")
+        self.kind = None
+
+
 class _Pause(Exception):
     """Not the model's fault (server down, low resources, stop requested): retry later."""
 
@@ -1718,7 +1780,7 @@ class Runner:
     def __init__(self, cfg: Config, plan: Plan, ws: Workspace, llm: LLMClient, *,
                  guard=None, run_cmd=run_command, log: Callable[[str], None] | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 should_stop: Callable[[], bool] = lambda: False):
+                 should_stop: Callable[[], bool] = lambda: False, live: LivePrinter | None = None):
         first = shlex.split(plan.test_command)[0]
         if first not in cfg.allowed_commands:
             raise PlanError(f"test_command {first!r} is not in allowed_commands {cfg.allowed_commands}")
@@ -1728,6 +1790,7 @@ class Runner:
         self.log = log or (lambda m: None)
         self.sleep = sleep
         self.should_stop = should_stop
+        self.live = live
         self.attempts = 0
         self.replies = ReplyLog(ws.root)
 
@@ -1952,12 +2015,22 @@ class Runner:
             raise _Pause("system resources stayed too low; will retry later")
         temperature = self._retry_temperature(attempt, bump)
         started = time.monotonic()
+        self.log(f"   asking the model ({phase}, attempt {attempt}, think={think_value(self.cfg)!r}); "
+                 "a reasoning model can be silent for minutes")
         try:
             self.attempts += 1
             extra = {"stop": stop} if stop else {}
+            if self.live:
+                self.live.prompt(messages, f"{step.title} / {phase} / attempt {attempt}")
+                extra["on_token"] = self.live.chunk
             text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict, **extra)
+            if self.live and not self.live.streamed:        # a backend that does not stream: show the whole reply now
+                self.live.chunk("content", str(text))
         except LLMError as e:
             raise _Pause(f"model unavailable: {e}") from e
+        finally:
+            if self.live:
+                self.live.end()
         seconds = time.monotonic() - started
         truncated = bool(getattr(text, "truncated", False))
         self.replies.save(step.title, phase, attempt, str(text), seconds=seconds, truncated=truncated,
@@ -2217,7 +2290,7 @@ def cmd_run(args, out, *, llm_factory, guard_factory, **_):
     try:
         runner = Runner(cfg, plan, ws, llm_factory(cfg),
                         guard=guard_factory(cfg, ws.root) if guard_factory else None,
-                        log=log, should_stop=stopper)
+                        log=log, should_stop=stopper, live=LivePrinter() if args.live else None)
         report = runner.run()
     except WorkspaceBusy as e:
         out(str(e))
@@ -2248,6 +2321,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tries", type=int, default=5)
     sp = sub.add_parser("run", help="build a plan")
     sp.add_argument("plan"); sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--live", action="store_true",
+                    help="show each prompt and the model's raw output (thinking too) as it streams; terminal only, not saved")
     return p
 
 

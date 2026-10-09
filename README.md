@@ -96,6 +96,18 @@ examples. The agent works on a branch `agent/<plan-title>`, never on your `main`
 
 ## Watching it work / finding out why a step failed
 
+**Live, in the same terminal:** add `--live` to `run` to see each prompt that goes to the model and its
+raw output (thinking first, then the answer) as it streams. It is shown in the terminal only and is not
+saved anywhere. Ollama backend only (the `openai` backend prints the whole reply when it arrives).
+
+```bash
+codeagent run plan.json --workspace ~/agent-projects/demo --live
+```
+
+Without `--live`, the log still prints `asking the model (...)` before every call, so a long
+reasoning pause is not mistaken for a hang.
+
+
 ```bash
 W=~/agent-projects/demo                                   # your --workspace
 tail -f $W/.codeagent/agent.log                           # live log (also printed in the terminal)

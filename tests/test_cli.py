@@ -176,3 +176,31 @@ def test_closed_pipe_exits_quietly_and_entry_point_returns_the_status(monkeypatc
     with pytest.raises(SystemExit) as e:
         entry()
     assert e.value.code == 0 and "steps" in capsys.readouterr().out
+
+
+def test_live_printer_shows_prompt_then_thinking_then_answer():
+    from agent import LivePrinter
+    out = []
+    live = LivePrinter(write=out.append, color=False)
+    live.prompt([{"role": "system", "content": "be brief"}, {"role": "user", "content": "write add"}], "step / tests / attempt 1")
+    live.chunk("thinking", "let me ")
+    live.chunk("thinking", "think")
+    live.chunk("content", "FILE: a.py")
+    live.end()
+    text = "".join(out)
+    assert text.index("PROMPT: step / tests / attempt 1") < text.index("write add") < text.index("MODEL THINKING")
+    assert text.index("let me think") < text.index("MODEL ANSWER (raw)") < text.index("FILE: a.py") < text.index("END")
+    assert "\x1b[" not in text
+
+
+def test_run_live_prints_the_prompt_and_the_raw_reply_but_saves_nothing_extra(plan, tmp_path, lines, capsys):
+    ws = tmp_path / "proj"
+    assert run_cli(["run", str(plan), "--workspace", str(ws), "--live"], lines, FakeLLM(TEST_CORE, INIT + CORE_OK)) == 0
+    shown = capsys.readouterr().out
+    assert "==== PROMPT:" in shown and "Create slugify(text)" in shown and "def test_basic" in shown
+    log = (ws / ".codeagent" / "agent.log").read_text()
+    assert "==== PROMPT" not in log and "def test_basic" not in log        # live view is terminal only
+    assert "asking the model" in text(lines)
+    lines.clear()
+    run_cli(["run", str(plan), "--workspace", str(tmp_path / "quiet")], lines, FakeLLM(TEST_CORE, INIT + CORE_OK))
+    assert "==== PROMPT:" not in capsys.readouterr().out                    # off unless asked for
