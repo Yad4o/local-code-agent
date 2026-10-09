@@ -1,4 +1,4 @@
-"""Command line: template | check | doctor | smoke | run | daemon"""
+"""Command line: template | check | doctor | smoke | bench | run | daemon"""
 import argparse
 import ast
 import logging
@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from codeagent import __version__
+from codeagent.bench import PROBLEMS, run_bench
 from codeagent.config import Config, ConfigError, load_config
 from codeagent.daemon import Daemon
 from codeagent.llm import LLMError, list_models, make_client
@@ -195,6 +196,19 @@ def cmd_smoke(args, out, **_):
     return EXIT_OK
 
 
+def cmd_bench(args, out, *, llm_factory, **_):
+    """Raw model test: no agent, no harness. Can the model write these functions at all?"""
+    cfg = _load(args, out)
+    known = {p.key for p in PROBLEMS}
+    unknown = [k for k in (args.only or []) if k not in known]
+    if unknown:
+        out(f"unknown problem(s): {', '.join(unknown)}. Choose from: {', '.join(sorted(known))}")
+        return EXIT_USAGE
+    temperature = args.temperature if args.temperature is not None else 0.4
+    run_bench(cfg, llm_factory(cfg), tries=args.tries, temperature=temperature, only=args.only, out=out)
+    return EXIT_OK
+
+
 def cmd_run(args, out, *, llm_factory, guard_factory, **_):
     cfg = _load(args, out)
     plan = load_plan(args.plan)
@@ -274,6 +288,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("doctor", help="check model server, model, git and system resources"); common(sp)
     sp = sub.add_parser("smoke", help="test whether the model follows the output format"); common(sp)
     sp.add_argument("--tries", type=int, default=5)
+    sp = sub.add_parser("bench", help="raw model test: can the model write small functions at all?"); common(sp)
+    sp.add_argument("--tries", type=int, default=5, help="samples per problem (default 5)")
+    sp.add_argument("--temperature", type=float, help="sampling temperature (default 0.4)")
+    sp.add_argument("--only", nargs="+", metavar="PROBLEM", help="run only these problems")
     sp = sub.add_parser("run", help="build a plan"); common(sp)
     sp.add_argument("plan"); sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
     sp = sub.add_parser("daemon", help="watch an inbox folder and build plans 24/7"); common(sp)
@@ -282,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"template": cmd_template, "check": cmd_check, "doctor": cmd_doctor,
-            "smoke": cmd_smoke, "run": cmd_run, "daemon": cmd_daemon}
+            "smoke": cmd_smoke, "bench": cmd_bench, "run": cmd_run, "daemon": cmd_daemon}
 
 
 def _silence_stdout() -> None:
