@@ -474,13 +474,13 @@ class Config:
     # --- model backend ---
     backend: str = "ollama"                     # "ollama" or "openai" (llama.cpp server etc.)
     base_url: str = "http://localhost:11434"
-    model: str = "qwen3.5:0.8b"                 # run `codeagent doctor` to list installed models
+    model: str = "qwen3.5-q4"                 # run `codeagent doctor` to list installed models
     think: bool = True                          # agentic coding needs the model to reason before it writes code
-    think_level: str = "high"                   # low | medium | high; only models that support levels (gpt-oss) use it
-    num_ctx: int = 8192                         # thinking tokens share the window with the prompt
-    num_predict: int = 4096                     # max tokens per call, thinking included
-    num_predict_tests: int = 2048               # smaller cap while writing tests
-    num_predict_body: int = 2048                # cap when the model only writes a function body (skeleton mode)
+    think_level: str = "low"                   # low | medium | high; only models that support levels (gpt-oss) use it
+    num_ctx: int = 16384                         # thinking tokens share the window with the prompt
+    num_predict: int = 8192                     # max tokens per call, thinking included
+    num_predict_tests: int = 8192               # smaller cap while writing tests
+    num_predict_body: int = 8192                # cap when the model only writes a function body (skeleton mode)
     temperature: float = 0.2
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
     retry_temperature_step: float = 0.05        # each retry runs this much hotter (small models get worse when hot)
