@@ -26,7 +26,11 @@ def render_tests(step: Step) -> str:
                       f"    with pytest.raises({ex.raises}):",
                       f"        {_call(name, ex)}"]
         else:
-            lines += [f"def test_example_{i}():", f"    assert {_call(name, ex)} == {ex.expect!r}"]
+            call = _call(name, ex)
+            lines += [f"def test_example_{i}():",
+                      f"    result = {call}",
+                      f"    expected = {ex.expect!r}",
+                      f"    assert result == expected, {call!r} + ' returned ' + repr(result) + ', but it must return ' + repr(expected)"]
         lines += ["", ""]
     source = "\n".join(lines).rstrip("\n") + "\n"
     ast.parse(source)                                   # a bug here must be loud, never silent

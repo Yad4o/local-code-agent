@@ -221,7 +221,8 @@ class Runner:
             if step.signature:                       # skeleton mode: the model wrote only the body
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
                 if not problems:
-                    files, problems = assemble_files(step, files)
+                    inits = {f: self._read_many([f])[f] for f in step.files if f.endswith("__init__.py")}
+                    files, problems = assemble_files(step, files, inits)
             else:
                 files, problems = self._collect(text, step.files)
             if not problems:
