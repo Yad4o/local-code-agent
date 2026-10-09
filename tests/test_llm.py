@@ -34,7 +34,16 @@ def test_ollama_chat_sends_expected_payload_and_returns_content(stub):
     assert body["stream"] is False
     assert body["think"] is False                      # no slow hidden reasoning on a tiny model
     assert body["keep_alive"] == "5m"
-    assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1}
+    assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1, "repeat_penalty": 1.1}
+
+
+def test_stop_sequences_are_sent_only_when_given(stub):
+    stub.responses = [ollama_reply("a"), ollama_reply("b")]
+    c = cfg_for(stub)
+    make_client(c).chat(MSGS)
+    make_client(c).chat(MSGS, stop=["\nFILE:"])
+    assert "stop" not in stub.requests[0][2]["options"]
+    assert stub.requests[1][2]["options"]["stop"] == ["\nFILE:"]
 
 
 def test_thinking_text_is_stripped_from_replies(stub):
@@ -194,3 +203,9 @@ def test_per_call_overrides_for_openai_backend(stub):
     make_client(cfg_for(stub, backend="openai")).chat(MSGS, temperature=0.9, num_predict=300)
     body = stub.requests[0][2]
     assert body["temperature"] == 0.9 and body["max_tokens"] == 300
+
+
+def test_openai_stop_sequences(stub):
+    stub.responses = [openai_reply("x")]
+    make_client(cfg_for(stub, backend="openai")).chat(MSGS, stop=["\nFILE:"])
+    assert stub.requests[0][2]["stop"] == ["\nFILE:"]

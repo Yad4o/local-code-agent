@@ -35,3 +35,8 @@ files = ["slugify/__init__.py", "slugify/core.py"]           # required: impleme
 # [[step.examples]]
 # args = [123]
 # raises = "TypeError"                        # a builtin exception name; use `kwargs = { x = 1 }` for keyword args
+#
+# FASTEST for a small model: also give the exact `signature`. The agent then writes the def line and the
+# package __init__.py itself and the model only writes the function BODY (a few lines, no loops).
+# `files` may then only be the module file and its package __init__.py files.
+# signature = "slugify(text)"

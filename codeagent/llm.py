@@ -32,7 +32,7 @@ def _reply(text: str, truncated: bool) -> Reply:
 
 class LLMClient(Protocol):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None) -> str: ...
+             num_predict: int | None = None, stop: list[str] | None = None) -> str: ...
 
 
 def _check_url(cfg: Config) -> str:
@@ -113,15 +113,19 @@ class _BaseClient:
 
 class OllamaClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None) -> Reply:
+             num_predict: int | None = None, stop: list[str] | None = None) -> Reply:
         c = self.cfg
+        options = {"num_ctx": c.num_ctx,
+                   "num_predict": num_predict if num_predict is not None else c.num_predict,
+                   "temperature": temperature if temperature is not None else c.temperature,
+                   "repeat_penalty": c.repeat_penalty}
+        if stop:
+            options["stop"] = stop
         data = self._request("/api/chat", {
             "model": c.model, "messages": messages, "stream": False,
             "think": False,                                # tiny models: skip slow hidden reasoning
             "keep_alive": c.keep_alive,
-            "options": {"num_ctx": c.num_ctx,
-                        "num_predict": num_predict if num_predict is not None else c.num_predict,
-                        "temperature": temperature if temperature is not None else c.temperature},
+            "options": options,
         })
         try:
             return self._finish(data["message"]["content"], data.get("done_reason") == "length")
@@ -131,13 +135,16 @@ class OllamaClient(_BaseClient):
 
 class OpenAIClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
-             num_predict: int | None = None) -> Reply:
+             num_predict: int | None = None, stop: list[str] | None = None) -> Reply:
         c = self.cfg
-        data = self._request("/v1/chat/completions", {
+        payload = {
             "model": c.model, "messages": messages, "stream": False,
             "max_tokens": num_predict if num_predict is not None else c.num_predict,
             "temperature": temperature if temperature is not None else c.temperature,
-        })
+        }
+        if stop:
+            payload["stop"] = stop
+        data = self._request("/v1/chat/completions", payload)
         try:
             choice = data["choices"][0]
             return self._finish(choice["message"]["content"], choice.get("finish_reason") == "length")

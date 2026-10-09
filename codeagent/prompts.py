@@ -67,8 +67,12 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
     parts = [
         _header(plan, step),
         "These tests must pass. Do NOT change the tests:\n" + _fit(dict(tests), budget // 2),
-        f"Write the implementation file(s): {', '.join(step.files)}",
     ]
+    if step.signature:
+        path = step.function.split(":")[0].replace(".", "/") + ".py"
+        parts.append(f"The function line is already written. Write ONLY its body:\n\ndef {step.signature}:\n    ...")
+    else:
+        parts.append(f"Write the implementation file(s): {', '.join(step.files)}")
     if step.function:
         module, name = step.function.split(":")
         parts.append(f"The tests call `{name}` imported from {module}: define exactly `def {name}(...)` "
@@ -80,6 +84,10 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         parts.append("Result of running the tests (fix what fails):\n" + test_output.strip())
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
+    if step.signature:
+        parts.append(f"Reply with ONLY this, the body lines and nothing else (no def line, no docstring, "
+                     f"no comments, no explanation):\nFILE: {path}\n```python\n<body lines>\n```")
+        return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
     parts.append(f"Reply with ONLY the file block(s) for: {', '.join(step.files)}. "
                  f"Do NOT write or change {', '.join(step.tests)}: the tests are already final.")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]

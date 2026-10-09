@@ -22,7 +22,9 @@ from codeagent.prompts import build_impl_prompt, build_tests_prompt
 from codeagent.replylog import ReplyLog
 from codeagent.resources import ResourceGuard
 from codeagent.shell import CommandResult, run_command
+from codeagent.skeleton import BODY_STOP, assemble_files, module_path
 from codeagent.spec_tests import defined_names, render_tests
+from codeagent.tidy import ruff_fix, ruff_problems, tidy_python
 from codeagent.state import RunState, WorkspaceLock
 from codeagent.testcheck import check_test_source, diagnose_broken_tests
 from codeagent.workspace import Workspace, WorkspaceError
@@ -208,16 +210,30 @@ class Runner:
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
                                                self.cfg.max_context_chars, output, feedback),
                              step=step, phase="impl", attempt=n,
-                             num_predict=self.cfg.num_predict)
-            files, problems = self._collect(text, step.files)
-            problems += self._lint_impl(step, files)
+                             num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
+                             stop=BODY_STOP if step.signature else None)
+            if step.signature:                       # skeleton mode: the model wrote only the body
+                files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
+                if not problems:
+                    files, problems = assemble_files(step, files)
+            else:
+                files, problems = self._collect(text, step.files)
+            if not problems:
+                problems += self._lint_impl(step, files)
+            if not problems and self.cfg.tidy_code:
+                files = {p: tidy_python(c) if p.endswith(".py") else c for p, c in files.items()}
             if problems:
                 feedback = _bullets(problems)
                 self.log(f"   impl attempt {n}: {problems[0]}")
                 continue
-            feedback = None
             self._write(files)
             self._write(tests)
+            problems = self._static_check(list(files))
+            if problems:
+                feedback = _bullets(problems)
+                self.log(f"   impl attempt {n}: static check: {problems[0]}")
+                continue
+            feedback = None
             res = self._run_tests()
             if res.ok:
                 return
@@ -235,6 +251,13 @@ class Runner:
         the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
         ceiling = max(self.cfg.temperature, self.cfg.max_retry_temperature)
         return min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+
+    def _static_check(self, paths: list[str]) -> list[str]:
+        """ruff, if installed: remove unused imports, then report undefined names before running anything."""
+        if not self.cfg.use_ruff:
+            return []
+        ruff_fix(self.ws.root, paths)
+        return ruff_problems(self.ws.root, paths)
 
     def _lint_impl(self, step: Step, files: dict[str, str]) -> list[str]:
         """A tool, not a prompt: the function the examples call must really be defined."""
@@ -260,7 +283,7 @@ class Runner:
         return out
 
     def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int,
-             num_predict: int | None = None) -> str:
+             num_predict: int | None = None, stop: list[str] | None = None) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
         ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
@@ -273,7 +296,8 @@ class Runner:
         started = time.monotonic()
         try:
             self.attempts += 1
-            text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict)
+            extra = {"stop": stop} if stop else {}
+            text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict, **extra)
         except LLMError as e:
             raise _Pause(f"model unavailable: {e}") from e
         seconds = time.monotonic() - started
@@ -285,7 +309,8 @@ class Runner:
         self.sleep(self.cfg.step_cooldown_s)              # let the laptop breathe
         return text
 
-    def _collect(self, text: str, allowed: tuple[str, ...]) -> tuple[dict[str, str], list[str]]:
+    def _collect(self, text: str, allowed: tuple[str, ...], *,
+                 check_syntax: bool = True) -> tuple[dict[str, str], list[str]]:
         parsed = parse_file_blocks(str(text), truncated=bool(getattr(text, "truncated", False)))
         for note in parsed.notes:
             self.log(f"   fixed up: {note}")
@@ -312,7 +337,7 @@ class Runner:
         for path, content in got.items():
             if len(content.encode("utf-8")) > self.cfg.max_file_bytes:
                 problems.append(f"{path}: file is too large")
-            elif path.endswith(".py"):
+            elif check_syntax and path.endswith(".py"):
                 try:
                     ast.parse(content)
                 except SyntaxError as e:
