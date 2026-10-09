@@ -732,3 +732,63 @@ def test_skeleton_mode_accepts_an_indented_body_and_a_body_with_blank_lines(tmp_
     r, ws = make_body_runner(tmp_path, llm, cfg)
     assert r.run().outcome == "done"
     assert len(llm.calls) == 1
+
+
+# ----------------------------------------------------------------- headerless blocks, no-return, repeated code
+
+def test_a_reply_without_a_file_header_is_used_when_only_one_file_is_possible(tmp_path, cfg):
+    headerless = "```python\nimport re\nreturn re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')\n```"
+    llm = FakeLLM(headerless)
+    lines = []
+    r, ws = make_body_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert len(llm.calls) == 1
+    assert any("no FILE header" in l for l in lines)
+
+
+def test_headerless_whole_function_in_a_one_file_step(tmp_path, cfg):
+    plan = parse_plan(EXAMPLES_PLAN.replace('files = ["slugify/__init__.py", "slugify/core.py"]',
+                                            'files = ["slugify/core.py"]'))
+    ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
+    llm = FakeLLM("```python\nimport re\n\ndef slugify(t):\n    return re.sub(r'[^a-z0-9]+', '-', t.lower()).strip('-')\n```")
+    r = Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=lambda m: None, sleep=lambda s: None,
+               should_stop=lambda: False)
+    assert r.run().outcome == "done" and len(llm.calls) == 1
+
+
+def test_two_headerless_blocks_are_still_rejected(tmp_path, cfg):
+    two = "```python\nreturn text\n```\nand also\n```python\nprint(1)\n```"
+    llm = FakeLLM(two, BODY_OK)
+    r, ws = make_body_runner(tmp_path, llm, cfg)
+    assert r.run().outcome == "done"
+    assert "no FILE blocks" in llm.calls[1][1]["content"]
+
+
+def test_a_function_that_never_returns_is_sent_back_before_running(tmp_path, cfg):
+    no_return = block("slugify/core.py", "text.lower()")
+    llm = FakeLLM(no_return, BODY_OK)
+    lines = []
+    r, ws = make_body_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert "never returns a value" in llm.calls[1][1]["content"]
+    assert any("never returns" in l for l in lines)
+
+
+def test_repeating_the_same_code_is_not_rerun_and_the_next_prompt_hides_it(tmp_path, cfg):
+    llm = FakeLLM(BODY_BAD, BODY_BAD, BODY_OK)
+    lines = []
+    r, ws = make_body_runner(tmp_path, llm, cfg, log=lines.append)
+    assert r.run().outcome == "done"
+    assert any("same code as attempt 1" in l for l in lines)
+    assert "identical to your attempt 1" in llm.calls[2][1]["content"]
+    assert "Current content of the files" not in llm.calls[2][1]["content"]
+    assert "Current content of the files" in llm.calls[1][1]["content"]
+    temps = [k["temperature"] for k in llm.kwargs]
+    assert temps[2] > temps[1]                                  # repeating itself earns a warmer retry
+
+
+def test_repeats_still_count_as_attempts(tmp_path, cfg):
+    cfg.max_attempts = 3
+    llm = FakeLLM(BODY_BAD, BODY_BAD, BODY_BAD)
+    assert make_body_runner(tmp_path, llm, cfg)[0].run().outcome == "failed"
+    assert len(llm.calls) == 3
