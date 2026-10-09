@@ -44,7 +44,8 @@ def test_rendered_tests_are_valid_python_with_unique_names():
 def test_rendered_tests_call_the_function_exactly_as_the_plan_says():
     src = render_tests(step())
     assert "from cart.engine import add_item" in src and "import pytest" in src
-    assert "assert add_item([], 'apple', 1.5) == [{'name': 'apple', 'price': 1.5, 'quantity': 1}]" in src
+    assert "result = add_item([], 'apple', 1.5)" in src
+    assert "expected = [{'name': 'apple', 'price': 1.5, 'quantity': 1}]" in src
     assert "with pytest.raises(ValueError):" in src
     assert "add_item([], 'apple', 1.5, quantity=0)" in src
 
@@ -85,3 +86,20 @@ def test_returns_a_value():
     assert returns_a_value("def f(x):\n    if x:\n        return 1\n", "f") is True
     assert returns_a_value("def other(): return 1\n", "f") is None
     assert returns_a_value("def f(:\n", "f") is None
+
+
+def test_a_failing_example_explains_itself_in_plain_words(tmp_path):
+    import subprocess, sys
+    (tmp_path / "cart").mkdir()
+    (tmp_path / "cart" / "__init__.py").write_text("")
+    (tmp_path / "cart" / "engine.py").write_text("def add_item(cart, name, price, quantity=1):\n    return cart\n")
+    (tmp_path / "test_add.py").write_text(render_tests(step()))
+    out = subprocess.run([sys.executable, "-m", "pytest", "-q", "test_add.py"], cwd=tmp_path,
+                         capture_output=True, text=True).stdout
+    assert "add_item([], 'apple', 1.5) returned [], but it must return [{'name': 'apple'" in out
+
+
+def test_messages_survive_quotes_and_braces_in_the_arguments():
+    import ast
+    plan = parse_plan(PLAN.replace('args = [[], "apple", 1.5]\nexpect', 'args = [[], "it\'s {x}", 1.5]\nexpect', 1))
+    ast.parse(render_tests(plan.steps[0]))

@@ -64,8 +64,10 @@ def assemble_module(step: Step, body: str) -> tuple[str | None, str | None]:
     return src, None
 
 
-def assemble_files(step: Step, got: dict[str, str]) -> tuple[dict[str, str], list[str]]:
-    """Turn the model's body into the complete set of files the step owns."""
+def assemble_files(step: Step, got: dict[str, str],
+                   existing_inits: dict[str, str | None] | None = None) -> tuple[dict[str, str], list[str]]:
+    """Turn the model's body into the complete set of files the step owns. A package `__init__.py` that
+    earlier steps already filled keeps its lines; this step's re-export is added to it."""
     path = module_path(step)
     source, problem = assemble_module(step, got.get(path, ""))
     if problem:
@@ -73,5 +75,7 @@ def assemble_files(step: Step, got: dict[str, str]) -> tuple[dict[str, str], lis
     files = {path: source}
     for p in step.files:
         if p.endswith("__init__.py") and p != path:
-            files[p] = init_source(step, p)
+            line = init_source(step, p)
+            old = (existing_inits or {}).get(p) or ""
+            files[p] = old if line.strip() in old.splitlines() else old + ("" if not old or old.endswith("\n") else "\n") + line
     return files, []

@@ -19,6 +19,7 @@ Rules:
 - Write only the files you are asked to write, with exactly those paths.
 - No explanations, no text outside the file blocks.
 - No comments and no docstrings: write only the code, as short as possible.
+- Do exactly what the description says: no extra validation, no type checks, no extra features.
 - An empty file is a block with nothing inside the fence."""
 
 

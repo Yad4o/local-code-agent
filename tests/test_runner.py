@@ -6,7 +6,7 @@ import pytest
 from codeagent import git
 from codeagent.config import Config
 from codeagent.llm import LLMError
-from codeagent.plan import PlanError, parse_plan
+from codeagent.plan import load_plan, PlanError, parse_plan
 from codeagent.runner import Runner
 from codeagent.state import WorkspaceBusy, WorkspaceLock
 from codeagent.workspace import Workspace
@@ -588,7 +588,7 @@ def test_examples_are_turned_into_tests_without_asking_the_model(tmp_path, cfg):
     assert r.run().outcome == "done"
     assert len(llm.calls) == 1                                  # only the implementation was generated
     tests = ws.read("tests/test_core.py")
-    assert "from slugify.core import slugify" in tests and "== 'hello-world'" in tests
+    assert "from slugify.core import slugify" in tests and "expected = 'hello-world'" in tests
     assert any("generated from 3 example(s)" in l for l in lines)
 
 
@@ -792,3 +792,27 @@ def test_repeats_still_count_as_attempts(tmp_path, cfg):
     llm = FakeLLM(BODY_BAD, BODY_BAD, BODY_BAD)
     assert make_body_runner(tmp_path, llm, cfg)[0].run().outcome == "failed"
     assert len(llm.calls) == 3
+
+
+# ----------------------------------------------------------------- the split cart plan runs end to end
+
+def test_the_split_cart_plan_completes_with_correct_bodies(tmp_path, cfg):
+    from pathlib import Path
+    plan = load_plan(Path(__file__).resolve().parents[1] / "examples" / "cart_split.toml")
+    ws = Workspace(tmp_path / "proj", cfg.max_file_bytes)
+    llm = FakeLLM(
+        block("cart/checks.py", "if price < 0 or quantity <= 0:\n    raise ValueError('bad')\nreturn True"),
+        block("cart/merge.py", "result = []\nfor item in cart:\n    if item['name'] == name:\n"
+                               "        result.append({**item, 'quantity': item['quantity'] + quantity})\n"
+                               "    else:\n        result.append(item)\nreturn result"),
+        block("cart/engine.py", "from cart.checks import check_args\nfrom cart.merge import merge_quantity\n"
+                                "check_args(price, quantity)\nif any(i['name'] == name for i in cart):\n"
+                                "    return merge_quantity(cart, name, quantity)\n"
+                                "return [*cart, {'name': name, 'price': price, 'quantity': quantity}]"))
+    report = Runner(cfg, plan, ws, llm, guard=FakeGuard(), log=lambda m: None, sleep=lambda s: None,
+                    should_stop=lambda: False).run()
+    assert report.outcome == "done" and len(llm.calls) == 3
+    init = ws.read("cart/__init__.py")
+    assert init.splitlines() == ["from .checks import check_args", "from .merge import merge_quantity",
+                                 "from .engine import add_item"]
+    assert "def merge_quantity" in llm.calls[2][1]["content"]       # later steps see earlier files via `context`

@@ -100,3 +100,15 @@ def test_assemble_files_builds_every_file_the_step_owns():
 def test_assemble_files_reports_a_bad_body():
     files, problems = assemble_files(step(), {"cart/engine.py": "return ("})
     assert files == {} and problems
+
+
+def test_init_file_keeps_earlier_steps_reexports():
+    files, _ = assemble_files(step(), {"cart/engine.py": "return cart"}, {"cart/__init__.py": "from .checks import check_args\n"})
+    assert files["cart/__init__.py"] == "from .checks import check_args\nfrom .engine import add_item\n"
+
+
+def test_init_line_is_not_duplicated_and_missing_newline_is_handled():
+    again, _ = assemble_files(step(), {"cart/engine.py": "return cart"}, {"cart/__init__.py": "from .engine import add_item\n"})
+    assert again["cart/__init__.py"] == "from .engine import add_item\n"
+    nonl, _ = assemble_files(step(), {"cart/engine.py": "return cart"}, {"cart/__init__.py": "X = 1"})
+    assert nonl["cart/__init__.py"] == "X = 1\nfrom .engine import add_item\n"
