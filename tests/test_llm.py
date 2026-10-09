@@ -49,14 +49,28 @@ def test_running_out_of_tokens_while_thinking_is_a_clear_error(stub):
         make_client(cfg_for(stub, num_predict=64)).chat(MSGS)
 
 
-def test_stop_sequences_are_sent_only_when_given(stub):
-    stub.responses = [ollama_reply("a"), ollama_reply("b")]
-    c = cfg_for(stub)
-    make_client(c).chat(MSGS)
-    make_client(c).chat(MSGS, stop=["\nFILE:"])
+def test_stop_sequences_go_to_the_server_only_when_not_thinking(stub):
+    stub.responses = [ollama_reply("a"), ollama_reply("b"), ollama_reply("c")]
+    make_client(cfg_for(stub, think=False)).chat(MSGS)
+    make_client(cfg_for(stub, think=False)).chat(MSGS, stop=["\nFILE:"])
+    make_client(cfg_for(stub)).chat(MSGS, stop=["\nFILE:"])
     assert "stop" not in stub.requests[0][2]["options"]
     assert stub.requests[1][2]["options"]["stop"] == ["\nFILE:"]
+    assert "stop" not in stub.requests[2][2]["options"]       # the reasoning may mention the marker and end the reply
 
+
+def test_stop_sequences_are_applied_to_the_answer_when_thinking(stub):
+    stub.responses = [ollama_reply("x = 1\nFILE: other.py\nmore")]
+    assert make_client(cfg_for(stub)).chat(MSGS, stop=["\nFILE:"]) == "x = 1"
+
+
+def test_empty_answer_explains_what_the_model_did(stub):
+    stub.responses = [(200, {"message": {"content": "", "thinking": "let me think " * 20}, "done_reason": "stop",
+                             "eval_count": 77})]
+    with pytest.raises(LLMError) as e:
+        make_client(cfg_for(stub)).chat(MSGS)
+    msg = str(e.value)
+    assert "done_reason='stop'" in msg and "77 tokens" in msg and "let me think" in msg and "CODEAGENT_THINK=false" in msg
 
 def test_thinking_text_is_stripped_from_replies(stub):
     stub.responses = [ollama_reply("<think>hmm</think>\nanswer")]
@@ -65,7 +79,7 @@ def test_thinking_text_is_stripped_from_replies(stub):
 
 def test_empty_reply_is_an_error(stub):
     stub.responses = [ollama_reply("   ")]
-    with pytest.raises(LLMError, match="empty"):
+    with pytest.raises(LLMError, match="no answer"):
         make_client(cfg_for(stub)).chat(MSGS)
 
 

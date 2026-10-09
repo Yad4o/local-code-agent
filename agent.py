@@ -1479,28 +1479,46 @@ def think_value(cfg: Config):
     return cfg.think_level if cfg.model.lower().startswith("gpt-oss") else True
 
 
+def _cut_at_stop(text: str, stop: list[str] | None) -> str:
+    for marker in stop or []:
+        text = text.split(marker, 1)[0]
+    return text
+
+
 class OllamaClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
              num_predict: int | None = None, stop: list[str] | None = None) -> Reply:
         c = self.cfg
+        think = think_value(c)
         options = {"num_ctx": c.num_ctx,
                    "num_predict": num_predict if num_predict is not None else c.num_predict,
                    "temperature": temperature if temperature is not None else c.temperature,
                    "repeat_penalty": c.repeat_penalty}
-        if stop:
-            options["stop"] = stop
+        if stop and not think:
+            options["stop"] = stop      # while thinking, the model's reasoning can contain the marker and end the reply early
         data = self._request("/api/chat", {
             "model": c.model, "messages": messages, "stream": False,
-            "think": think_value(c),
+            "think": think,
             "keep_alive": c.keep_alive,
             "options": options,
         })
         try:
             msg = data["message"]
-            if not str(msg.get("content") or "").strip() and msg.get("thinking") and data.get("done_reason") == "length":
-                raise LLMError(f"the model used all {options['num_predict']} tokens thinking and wrote no answer; "
-                               "raise num_predict or set think_level lower")
-            return self._finish(msg["content"], data.get("done_reason") == "length")
+            content = _cut_at_stop(str(msg.get("content") or ""), stop)
+            reason = data.get("done_reason")
+            if not strip_thinking(content):
+                thinking = str(msg.get("thinking") or "")
+                raise LLMError(
+                    f"the model sent no answer (think={think!r}, done_reason={reason!r}, "
+                    f"{data.get('eval_count', '?')} tokens, num_predict={options['num_predict']}, "
+                    f"answer chars={len(content)}, thinking chars={len(thinking)}"
+                    + (f", thinking ends: {thinking[-160:]!r}" if thinking else "")
+                    + (", content starts: " + repr(content[:160]) if content.strip() else "") + "). "
+                    + ("It ran out of tokens while thinking: raise CODEAGENT_NUM_PREDICT or lower CODEAGENT_THINK_LEVEL."
+                       if reason == "length" else
+                       "It stopped on its own before answering: this model may not handle think=true "
+                       "(try CODEAGENT_THINK=false, or check `ollama show <model>` for thinking support)."))
+            return self._finish(content, reason == "length")
         except (KeyError, TypeError, AttributeError) as e:
             raise LLMError("unexpected response shape from Ollama") from e
 

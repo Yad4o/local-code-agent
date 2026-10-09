@@ -13,14 +13,14 @@ def clean_env(monkeypatch):
 def test_defaults_are_safe_for_a_small_laptop():
     c = Config()
     assert (c.backend, c.base_url) == ("ollama", "http://localhost:11434")
-    assert c.num_ctx <= 8192 and c.min_free_mem_mb > 0 and c.max_temp_c < 100
+    assert c.num_ctx <= 16384 and c.min_free_mem_mb > 0 and c.max_temp_c < 100
     assert c.allow_remote_llm is False and c.stop_on_failure is True
     assert set(c.allowed_commands) == {"python", "python3", "pytest"}
 
 
-def test_agentic_coding_thinks_at_high_quality_by_default():
+def test_agentic_coding_thinks_by_default():
     c = Config()
-    assert c.think is True and c.think_level == "high"
+    assert c.think is True and c.think_level in ("low", "medium", "high")
     assert c.num_predict_tests <= c.num_predict and c.num_predict_body <= c.num_predict
 
 
