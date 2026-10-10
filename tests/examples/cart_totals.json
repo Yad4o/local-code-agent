@@ -1,0 +1,272 @@
+{
+  "title": "Cart Totals",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "line_total multiplies price by quantity",
+      "description": "Create line_total(item) in totals/line.py. item is a dict {\"name\", \"price\", \"quantity\"}.\n1. return item[\"price\"] * item[\"quantity\"]\n",
+      "commit": "feat: add line_total",
+      "tests": [
+        "tests/test_line.py"
+      ],
+      "files": [
+        "totals/__init__.py",
+        "totals/line.py"
+      ],
+      "function": "totals.line:line_total",
+      "signature": "line_total(item)",
+      "examples": [
+        {
+          "args": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 2
+            }
+          ],
+          "expect": 3.0
+        },
+        {
+          "args": [
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 1
+            }
+          ],
+          "expect": 2.0
+        },
+        {
+          "args": [
+            {
+              "name": "kiwi",
+              "price": 0.5,
+              "quantity": 0
+            }
+          ],
+          "expect": 0.0
+        }
+      ]
+    },
+    {
+      "title": "cart_total adds up every line",
+      "description": "Create cart_total(cart) in totals/cart.py. Use line_total from totals/line.py (already written, shown below).\ncart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\n1. total = 0\n2. For each item in cart: total = total + line_total(item)\n3. return total\n",
+      "commit": "feat: add cart_total",
+      "tests": [
+        "tests/test_cart.py"
+      ],
+      "files": [
+        "totals/__init__.py",
+        "totals/cart.py"
+      ],
+      "context": [
+        "totals/line.py"
+      ],
+      "function": "totals.cart:cart_total",
+      "signature": "cart_total(cart)",
+      "examples": [
+        {
+          "args": [
+            []
+          ],
+          "expect": 0
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 2
+              }
+            ]
+          ],
+          "expect": 3.0
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 2
+              },
+              {
+                "name": "pear",
+                "price": 2.0,
+                "quantity": 1
+              }
+            ]
+          ],
+          "expect": 5.0
+        }
+      ]
+    },
+    {
+      "title": "remove_item drops one item by name",
+      "description": "Create remove_item(cart, name) in totals/remove.py. cart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart: if item[\"name\"] != name: result.append(item)\n3. return result\n",
+      "commit": "feat: add remove_item",
+      "tests": [
+        "tests/test_remove.py"
+      ],
+      "files": [
+        "totals/__init__.py",
+        "totals/remove.py"
+      ],
+      "function": "totals.remove:remove_item",
+      "signature": "remove_item(cart, name)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 2
+              },
+              {
+                "name": "pear",
+                "price": 2.0,
+                "quantity": 1
+              }
+            ],
+            "apple"
+          ],
+          "expect": [
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 2
+              },
+              {
+                "name": "pear",
+                "price": 2.0,
+                "quantity": 1
+              }
+            ],
+            "kiwi"
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 2
+            },
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "apple"
+          ],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "title": "apply_discount takes a percentage off a total",
+      "description": "Create apply_discount(total, percent) in totals/discount.py.\n1. If percent is less than 0 or more than 100, raise ValueError.\n2. return total - total * percent / 100\n",
+      "commit": "feat: add apply_discount",
+      "tests": [
+        "tests/test_discount.py"
+      ],
+      "files": [
+        "totals/__init__.py",
+        "totals/discount.py"
+      ],
+      "function": "totals.discount:apply_discount",
+      "signature": "apply_discount(total, percent)",
+      "examples": [
+        {
+          "args": [
+            200.0,
+            25
+          ],
+          "expect": 150.0
+        },
+        {
+          "args": [
+            80.0,
+            0
+          ],
+          "expect": 80.0
+        },
+        {
+          "args": [
+            50.0,
+            100
+          ],
+          "expect": 0.0
+        },
+        {
+          "args": [
+            10.0,
+            -1
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            10.0,
+            101
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "receipt_line prints one item as text",
+      "description": "Create receipt_line(item) in totals/receipt.py. Use line_total from totals/line.py (already written, shown below).\nitem is a dict {\"name\", \"price\", \"quantity\"}.\n1. return item[\"name\"] + \" x\" + str(item[\"quantity\"]) + \" = \" + str(line_total(item))\n",
+      "commit": "feat: add receipt_line",
+      "tests": [
+        "tests/test_receipt.py"
+      ],
+      "files": [
+        "totals/__init__.py",
+        "totals/receipt.py"
+      ],
+      "context": [
+        "totals/line.py"
+      ],
+      "function": "totals.receipt:receipt_line",
+      "signature": "receipt_line(item)",
+      "examples": [
+        {
+          "args": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 2
+            }
+          ],
+          "expect": "apple x2 = 3.0"
+        },
+        {
+          "args": [
+            {
+              "name": "pear",
+              "price": 2.0,
+              "quantity": 1
+            }
+          ],
+          "expect": "pear x1 = 2.0"
+        }
+      ]
+    }
+  ]
+}

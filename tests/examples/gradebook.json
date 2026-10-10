@@ -1,0 +1,208 @@
+{
+  "title": "Grade Book",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "average returns the mean of a list of scores",
+      "description": "Create average(scores) in gradebook/average.py. scores is a list of numbers.\n1. If scores is empty, raise ValueError.\n2. total = 0\n3. For each s in scores: total = total + s\n4. return total / len(scores)\n",
+      "commit": "feat: add average",
+      "tests": [
+        "tests/test_average.py"
+      ],
+      "files": [
+        "gradebook/__init__.py",
+        "gradebook/average.py"
+      ],
+      "function": "gradebook.average:average",
+      "signature": "average(scores)",
+      "examples": [
+        {
+          "args": [
+            [
+              80,
+              90,
+              100
+            ]
+          ],
+          "expect": 90.0
+        },
+        {
+          "args": [
+            [
+              70
+            ]
+          ],
+          "expect": 70.0
+        },
+        {
+          "args": [
+            []
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "letter_grade turns a score into A, B, C, D or F",
+      "description": "Create letter_grade(score) in gradebook/letter.py.\n1. If score is less than 0 or more than 100, raise ValueError.\n2. If score >= 90, return \"A\".\n3. If score >= 80, return \"B\".\n4. If score >= 70, return \"C\".\n5. If score >= 60, return \"D\".\n6. return \"F\"\n",
+      "commit": "feat: add letter_grade",
+      "tests": [
+        "tests/test_letter.py"
+      ],
+      "files": [
+        "gradebook/__init__.py",
+        "gradebook/letter.py"
+      ],
+      "function": "gradebook.letter:letter_grade",
+      "signature": "letter_grade(score)",
+      "examples": [
+        {
+          "args": [
+            95
+          ],
+          "expect": "A"
+        },
+        {
+          "args": [
+            90
+          ],
+          "expect": "A"
+        },
+        {
+          "args": [
+            85
+          ],
+          "expect": "B"
+        },
+        {
+          "args": [
+            70
+          ],
+          "expect": "C"
+        },
+        {
+          "args": [
+            60
+          ],
+          "expect": "D"
+        },
+        {
+          "args": [
+            59.5
+          ],
+          "expect": "F"
+        },
+        {
+          "args": [
+            101
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            -1
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "best_student finds the name with the highest average",
+      "description": "Create best_student(grades) in gradebook/best.py. Use average from gradebook/average.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores. If two students tie, the first one wins.\n1. If grades is empty, raise ValueError.\n2. best_name = None and best_avg = None\n3. For each name in grades:\n   - avg = average(grades[name])\n   - if best_avg is None or avg > best_avg: best_name = name and best_avg = avg\n4. return best_name\n",
+      "commit": "feat: add best_student",
+      "tests": [
+        "tests/test_best.py"
+      ],
+      "files": [
+        "gradebook/__init__.py",
+        "gradebook/best.py"
+      ],
+      "context": [
+        "gradebook/average.py"
+      ],
+      "function": "gradebook.best:best_student",
+      "signature": "best_student(grades)",
+      "examples": [
+        {
+          "args": [
+            {
+              "ann": [
+                90,
+                80
+              ],
+              "bob": [
+                100,
+                90
+              ]
+            }
+          ],
+          "expect": "bob"
+        },
+        {
+          "args": [
+            {
+              "ann": [
+                70
+              ],
+              "bob": [
+                70
+              ]
+            }
+          ],
+          "expect": "ann"
+        },
+        {
+          "args": [
+            {}
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "report_card maps every student to a letter grade",
+      "description": "Create report_card(grades) in gradebook/report.py. Use average from gradebook/average.py and letter_grade from gradebook/letter.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores.\n1. result = {}\n2. For each name in grades: result[name] = letter_grade(average(grades[name]))\n3. return result\n",
+      "commit": "feat: add report_card",
+      "tests": [
+        "tests/test_report.py"
+      ],
+      "files": [
+        "gradebook/__init__.py",
+        "gradebook/report.py"
+      ],
+      "context": [
+        "gradebook/average.py",
+        "gradebook/letter.py"
+      ],
+      "function": "gradebook.report:report_card",
+      "signature": "report_card(grades)",
+      "examples": [
+        {
+          "args": [
+            {
+              "ann": [
+                90,
+                100
+              ],
+              "bob": [
+                55,
+                65,
+                60
+              ]
+            }
+          ],
+          "expect": {
+            "ann": "A",
+            "bob": "D"
+          }
+        },
+        {
+          "args": [
+            {}
+          ],
+          "expect": {}
+        }
+      ]
+    }
+  ]
+}

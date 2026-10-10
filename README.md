@@ -232,6 +232,29 @@ compound one. `tests/examples/cart_split.json` splits the cart into three tiny s
 each with its algorithm written in plain words. Later steps see earlier files through `context`, and each
 skeleton step adds its re-export to the package `__init__.py` instead of replacing it.
 
+### Writing step descriptions a small model can follow
+
+The model cannot invent an algorithm; it can follow a recipe. Write the recipe: numbered lines, every variable
+named, real expressions. A description that said "append a copy of the item whose quantity is old + new" failed
+all 6 attempts (the model appended the same item in both branches); the same step written as
+`new_item = dict(item); new_item["quantity"] = item["quantity"] + quantity; result.append(new_item)` passed on
+attempt 1. Put error checks first, state tie-breaking rules, avoid words like "validate" or "handle edge cases",
+and give an example for every branch and every `raises`. Examples cannot expect `null`/`None`, tuples or sets.
+The full rules are in [`docs/PLAN_GUIDE_FOR_AI.md`](docs/PLAN_GUIDE_FOR_AI.md): give that file to any
+AI assistant, then tell it what you want built, and it writes the plan JSON for you.
+
+More example plans: `tests/examples/cart_totals.json` (steps that call earlier steps), `text_tools.json`
+(strings, loops, tie-breaking), `gradebook.json` (branch chains, dict input, errors). Run any of them with
+`codeagent run tests/examples/<name>.json --workspace ~/agent-projects/<name> --live`.
+
+### Building something big
+
+Split it into **pure functions** (data in, data out) and build those with plans; write the glue that touches the
+outside world (files, network, `print`, CLI, classes) yourself. Keep one plan to 5-15 steps; for a bigger project
+make several plans (core, then rules, then formatting...) and run them in order **in the same workspace**: each
+new plan branches from the previous one, so its steps can use the earlier files through `context`. Finished steps
+are skipped on a rerun, and a step you edit runs again.
+
 ## Is the model the problem? `tests/bench.py`
 
 Tests the model with no agent around it: seven small functions asked in plain words (3 basic, 3 medium,
