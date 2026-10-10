@@ -1260,7 +1260,9 @@ def assemble_module(step: Step, body: str, imports: list[str] | None = None) -> 
     try:
         ast.parse(src)
     except SyntaxError as e:
-        return None, f"the body is not valid Python inside `def {step.signature}:` ({e.msg}, line {e.lineno} of the module)"
+        bad = src.splitlines()[e.lineno - 1].strip() if e.lineno and 0 < e.lineno <= len(src.splitlines()) else ""
+        where = f"the line `{bad}`" if bad else f"line {e.lineno} of the module"
+        return None, f"the body is not valid Python inside `def {step.signature}:` ({e.msg}, {where})"
     return src, None
 
 
@@ -2564,6 +2566,30 @@ def cmd_template(args, out, **_):
     return EXIT_OK
 
 
+def lint_description(text: str) -> list[str]:
+    """Warnings about description lines a small model copies literally into invalid or skipped code.
+    Only advice: a plan with warnings still runs."""
+    out: list[str] = []
+    lines = [l for l in text.splitlines() if l.strip()]
+    numbered = [l for l in lines if re.match(r"\s*\d+\.\s", l)]
+    loops = [l for l in lines if re.match(r"\s*(?:\d+\.|-)?\s*for each\b", l, re.I)]
+    if len(numbered) > 6:
+        out.append(f"{len(numbered)} numbered lines: a small model skips steps in long recipes; split this into two steps (about 5-6 lines at most)")
+    if len(loops) > 1:
+        out.append(f"{len(loops)} loops: keep one loop per step and split the rest into another function")
+    for l in lines:
+        t = l.strip()
+        if re.search(r"(?<![=!<>])=(?!=)[^\n]*?\band\b\s+[\w.\[\]\"']+\s*=(?!=)", t):
+            out.append(f"two assignments joined with 'and' (the model copies it as invalid Python): {t[:70]}")
+        elif re.search(r"(?i)\bfor each\b[^\n]*:\s*\S", t):
+            out.append(f"a loop and its body on one line (write the loop on its own line, its statements as bullets below): {t[:70]}")
+        elif re.match(r"(?:\d+\.|-)\s", t) and re.search(r";\s*\S", t):
+            out.append(f"statements joined with ';' (put each statement on its own line): {t[:70]}")
+        elif re.match(r"(?:\d+\.|-)\s*If [^:\n]*, (?:return|raise)\b", t):
+            out.append(f"an English condition is often skipped; write it as code, e.g. `if x < 0: raise ValueError`: {t[:70]}")
+    return out
+
+
 def cmd_check(args, out, **_):
     cfg = load_config()
     plan = load_plan(args.plan)
@@ -2575,6 +2601,8 @@ def cmd_check(args, out, **_):
         out(f"       tests: {', '.join(s.tests)}")
         out(f"       files: {', '.join(s.files)}")
         out(f"       commit: {s.commit}")
+        for w in lint_description(s.description):
+            out(f"       warning: {w}")
     return EXIT_OK
 
 

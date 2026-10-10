@@ -100,6 +100,15 @@ def test_think_body_true_keeps_thinking_for_the_first_attempt(tmp_path, cfg):  #
     assert "think" not in llm.kwargs[0] and llm.kwargs[1]["think"] is False
 
 
+def test_a_syntax_error_in_the_body_quotes_the_bad_line_in_the_feedback(tmp_path, cfg):  # noqa: F811
+    from tests.test_runner import BODY_OK, block
+    bad = block("slugify/core.py", "best = None and other = None\nreturn text")
+    llm = FakeLLM(bad, BODY_OK)
+    make_body_runner(tmp_path, llm, cfg)[0].run()
+    second_prompt = str(llm.calls[1])
+    assert "best = None and other = None" in second_prompt
+
+
 def test_a_reply_that_is_bare_code_without_a_fence_is_used_instead_of_wasting_an_attempt(tmp_path, cfg):  # noqa: F811
     bare = "import re\ndef slugify(text):\n    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')\n"
     llm = FakeLLM(bare)

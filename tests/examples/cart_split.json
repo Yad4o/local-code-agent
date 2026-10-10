@@ -4,7 +4,7 @@
   "steps": [
     {
       "title": "check_args validates price and quantity",
-      "description": "Create check_args(price, quantity) in cart/checks.py.\n1. If price is less than 0, or quantity is 0 or less, raise ValueError.\n2. Otherwise return True.\n",
+      "description": "Create check_args(price, quantity) in cart/checks.py.\n1. if price < 0: raise ValueError\n2. if quantity <= 0: raise ValueError\n3. return True\n",
       "commit": "feat: add cart check_args",
       "tests": [
         "tests/test_checks.py"
@@ -48,7 +48,7 @@
     },
     {
       "title": "merge_quantity raises the quantity of one item",
-      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] == name: new_item = dict(item); new_item[\"quantity\"] = item[\"quantity\"] + quantity; result.append(new_item)\n   - else: result.append(item)\n3. return result\n",
+      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] == name:\n     - new_item = dict(item)\n     - new_item[\"quantity\"] = item[\"quantity\"] + quantity\n     - result.append(new_item)\n   - else:\n     - result.append(item)\n3. return result\n",
       "commit": "feat: add cart merge_quantity",
       "tests": [
         "tests/test_merge.py"
@@ -134,7 +134,7 @@
     },
     {
       "title": "add_item adds an item to the cart",
-      "description": "Create add_item(cart, name, price, quantity=1) in cart/engine.py. Use check_args from cart/checks.py and\nmerge_quantity from cart/merge.py (already written, shown below). Return a NEW list; never change the input cart.\n1. Call check_args(price, quantity).\n2. If any item in cart has this name, return merge_quantity(cart, name, quantity).\n3. Otherwise return a new list: all the cart items, then a new dict {\"name\": name, \"price\": price, \"quantity\": quantity}.\n",
+      "description": "Create add_item(cart, name, price, quantity=1) in cart/engine.py. Use check_args from cart/checks.py and\nmerge_quantity from cart/merge.py (already written, shown below). Return a NEW list; never change the input cart.\n1. check_args(price, quantity)\n2. if any(item[\"name\"] == name for item in cart): return merge_quantity(cart, name, quantity)\n3. return [*cart, {\"name\": name, \"price\": price, \"quantity\": quantity}]\n",
       "commit": "feat: add cart add_item",
       "tests": [
         "tests/test_add.py"
