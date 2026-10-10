@@ -496,7 +496,7 @@ class Config:
     request_timeout: float = 900.0              # thinking makes replies slower
     allow_remote_llm: bool = False              # False = refuse any non-local base_url (offline guarantee)
     # --- agent loop ---
-    max_attempts: int = 4                       # tries per phase (tests / implementation)
+    max_attempts: int = 6                       # tries per phase (tests / implementation); calls without thinking are cheap
     max_test_rewrites: int = 2                  # times broken tests discovered while implementing are rewritten
     stop_on_failure: bool = True
     tidy_code: bool = True                      # strip docstrings/comments and re-print model code in one style
@@ -1166,6 +1166,17 @@ def init_source(step: Step, init_path: str) -> str:
     return f"from .{rest} import {_function_name(step)}\n"
 
 
+def step_context(step: Step) -> tuple[str, ...]:
+    """The plan's context files, plus any existing-looking .py path the description names: a step that says
+    "use check_args from cart/checks.py" needs that file shown and imported even if the plan forgot to list it."""
+    own = {*step.files, *step.tests}
+    out = list(step.context)
+    for p in re.findall(r"[\w./-]+\.py\b", step.description):
+        if p not in out and p not in own and not _bad_path(p):
+            out.append(p)
+    return tuple(out)
+
+
 def _top_level_names(source: str) -> list[str]:
     try:
         tree = ast.parse(source)
@@ -1179,7 +1190,7 @@ def context_imports(step: Step, sources: dict[str, str | None]) -> list[str]:
     the harness writes the imports, the model only writes the body (and so cannot forget them)."""
     own = module_path(step) if step.function else ""
     out = []
-    for path in step.context:
+    for path in step_context(step):
         src = sources.get(path)
         if not src or not path.endswith(".py") or path.endswith("__init__.py") or path == own:
             continue
@@ -1829,6 +1840,19 @@ def _example_line(name: str, ex: Example) -> str:
     return f"- {call} raises {ex.raises}" if ex.raises else f"- {call} -> {ex.expect!r}"
 
 
+def _name_the_calls(report: str, name: str, examples: tuple[Example, ...]) -> str:
+    """`test_example_2_raises_ValueError: Failed: DID NOT RAISE ValueError` says nothing about WHICH call;
+    the harness knows, so it says it."""
+    def line(m: re.Match) -> str:
+        i = int(m.group(1))
+        if not 1 <= i <= len(examples):
+            return m.group(0)
+        call, rest = _call(name, examples[i - 1]), m.group(2)
+        m2 = re.match(r"Failed: DID NOT RAISE (\w+)", rest)
+        return f"{call} must raise {m2.group(1)}, but it returned normally" if m2 else f"{call}: {rest}"
+    return re.sub(r"^test_example_(\d+)(?:_raises_\w+)?: (.*)$", line, report, flags=re.M)
+
+
 def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
                       budget: int, test_output: str | None, feedback: str | None) -> list[dict]:
     """Skeleton mode: the model sees the task, the def line, the examples, how its last body failed, and
@@ -1840,7 +1864,7 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         parts.append("The tests check exactly these examples:\n" + "\n".join(_example_line(name, e)[:300] for e in step.examples))
     else:
         parts.append("These tests must pass:\n" + _fit(dict(tests), budget // 2))
-    ctx = {p: existing.get(p) for p in step.context}
+    ctx = {p: existing.get(p) for p in step_context(step)}
     if any(v is not None for v in ctx.values()):
         parts.append("Related files (read-only):\n" + _fit(ctx, budget // 2))
     ready = [ln.rsplit(" import ", 1)[1] for ln in context_imports(step, existing)]
@@ -1849,8 +1873,11 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
     prev = function_body(existing.get(path) or "", name)
     if prev and prev.strip() != "pass":
         parts.append("Your previous body, which failed (do not repeat it):\n```python\n" + prev[:budget // 2] + "\n```")
+    if re.search(r"^\s*\d+[.)]\s", step.description, re.M):
+        parts.append("Follow the numbered steps above in order, one after the other: do not skip a step "
+                     "and do not add checks of your own.")
     if test_output:
-        parts.append("What the tests reported:\n" + condense_test_output(test_output))
+        parts.append("What the tests reported:\n" + _name_the_calls(condense_test_output(test_output), name, step.examples))
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
     parts.append("Reply with ONLY this, the body lines and nothing else (no def line, no docstring, "
@@ -2184,8 +2211,9 @@ class Runner:
             if satisfied:
                 return
         for n in range(1, self.cfg.max_attempts + 1):
-            existing = {p: None for p in (*step.files, *step.context)} if fresh \
-                else self._read_many((*step.files, *step.context))
+            existing = self._read_many((*step.files, *step_context(step)))
+            if fresh:                                    # hide only the model's own old code, never the related files
+                existing.update({p: None for p in step.files})
 
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
                                                self.cfg.max_context_chars, output, feedback),
@@ -2201,7 +2229,7 @@ class Runner:
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
                 if not problems:
                     inits = {f: self._read_many([f])[f] for f in step.files if f.endswith("__init__.py")}
-                    files, problems = assemble_files(step, files, inits, self._read_many(step.context))
+                    files, problems = assemble_files(step, files, inits, self._read_many(step_context(step)))
             else:
                 files, problems = self._collect(text, step.files)
             if not problems:
@@ -2212,7 +2240,8 @@ class Runner:
                 feedback = _bullets(problems)
                 self.log(f"   impl attempt {n}: {problems[0]}")
                 continue
-            key = "\n".join(f"{p}\n{files[p]}" for p in sorted(files))
+            key = "\n".join(f"{p}\n{(function_body(files[p], _function_name(step)) if step.signature and p == module_path(step) else None) or files[p]}"
+                            for p in sorted(files))
             if key in seen:                              # a tiny model often copies its last answer verbatim
                 repeats += 1
                 fresh = True
