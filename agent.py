@@ -484,6 +484,8 @@ class Config:
     temperature: float = 0.2
     think_body: bool = False                    # False: a function body is written without thinking (a 0.8B model
                                                 # that thinks about a 5-line body wanders for minutes and answers worse)
+    think_body_after: int = 4                   # a body that failed this many attempts WITHOUT thinking is tried with thinking
+                                                # (still bounded by max_think_chars); 0 = never
     temperature_no_think: float = 0.3           # temperature for calls that run without thinking
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
     top_p: float = 0.95                         # sampling cut-offs recommended for Qwen; 0 = leave to the server
@@ -2217,6 +2219,7 @@ class Runner:
         fresh = False                                    # next prompt hides the previous code (anti-anchoring)
         repeats = 0                                      # how many times the model repeated itself
         quiet = bool(step.signature) and self.cfg.think and not self.cfg.think_body   # a body is written without thinking
+        cannot_think = False                             # a call that thought and never answered: never think again
         if step.signature:
             gone = missing_named_files(step, self._read_many(step_context(step)))
             if gone:
@@ -2235,10 +2238,10 @@ class Runner:
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
                              stop=BODY_STOP if step.signature else None, bump=0.15 * repeats,
-                             think=False if quiet else None)
+                             think=False if (quiet and (cannot_think or not self.cfg.think_body_after or n < self.cfg.think_body_after)) else None)
             fresh = False
             if getattr(text, "no_answer", ""):
-                quiet = True
+                quiet = cannot_think = True
                 repeats += 1
             if step.signature:                       # skeleton mode: the model wrote only the body
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
