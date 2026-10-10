@@ -720,8 +720,8 @@ def test_repeating_the_same_code_is_not_rerun_and_the_next_prompt_hides_it(tmp_p
     assert r.run().outcome == "done"
     assert any("same code as attempt 1" in l for l in lines)
     assert "identical to your attempt 1" in llm.calls[2][1]["content"]
-    assert "Current content of the files" not in llm.calls[2][1]["content"]
-    assert "Current content of the files" in llm.calls[1][1]["content"]
+    assert "which failed" not in llm.calls[2][1]["content"]
+    assert "which failed" in llm.calls[1][1]["content"]
     temps = [k["temperature"] for k in llm.kwargs]
     assert temps[2] > temps[1]                                  # repeating itself earns a warmer retry
 
