@@ -128,7 +128,7 @@ Writing a function body does **not** think by default (`CODEAGENT_THINK_BODY=fal
 `CODEAGENT_TEMPERATURE_NO_THINK=0.3`): in a real run a 0.8B model spent 4-5 minutes wandering in its thinking
 for a 5-line body, while the same call without thinking answered in 8 seconds. Set `CODEAGENT_THINK_BODY=true`
 to bring thinking back. A body that still fails without thinking is retried with thinking from attempt
-`CODEAGENT_THINK_BODY_AFTER` (default 4; 0 = never), still bounded by `CODEAGENT_MAX_THINK_CHARS`. The harness also writes the `from pkg.mod import name` lines for every context function
+`CODEAGENT_THINK_BODY_AFTER` (default 0 = never; try 4), still bounded by `CODEAGENT_MAX_THINK_CHARS`. The harness also writes the `from pkg.mod import name` lines for every context function
 named in the step description, and always puts the planned signature back if the model rewrote the def line.
 
 Files the step description names (like "use check_args from cart/checks.py") are shown to the model and imported
@@ -239,12 +239,13 @@ named, real expressions. A description that said "append a copy of the item whos
 all 6 attempts (the model appended the same item in both branches); the same step written as
 `new_item = dict(item); new_item["quantity"] = item["quantity"] + quantity; result.append(new_item)` passed on
 attempt 1. Put error checks first, state tie-breaking rules, avoid words like "validate" or "handle edge cases",
-and give an example for every branch and every `raises`. Examples cannot expect `null`/`None`, tuples or sets.
+give every loop its own line (never `for ...: if ...:` on one line), keep a recipe to 5 lines and one loop (split
+it otherwise), and give an example for every branch and every `raises`. Examples cannot expect `null`/`None`, tuples or sets.
 The full rules are in [`docs/PLAN_GUIDE_FOR_AI.md`](docs/PLAN_GUIDE_FOR_AI.md): give that file to any
 AI assistant, then tell it what you want built, and it writes the plan JSON for you.
 
 More example plans: `tests/examples/cart_totals.json` (steps that call earlier steps), `text_tools.json`
-(strings, loops, tie-breaking), `gradebook.json` (branch chains, dict input, errors). Run any of them with
+(strings, loops, a hard step split in two), `gradebook.json` (branch chains, dict input, errors). Run any of them with
 `codeagent run tests/examples/<name>.json --workspace ~/agent-projects/<name> --live`.
 
 ### Building something big

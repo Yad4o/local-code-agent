@@ -158,8 +158,16 @@ Rules:
 * Start with `Create name(params) in path/to/module.py.`, with the same signature as the `signature` field.
 * **Name every variable** and write real expressions. Write `new_item = dict(item)` and
   `new_item["quantity"] = item["quantity"] + quantity`. Never write "make a modified copy".
-* One action per line. Branches as `- if ...:` and `- else:` bullets.
+* **One statement per line.** Write a loop as its own line (`For each ch in text:`) with the statements under it as
+  `-` bullets. Never put a `for` and an `if` on the same line, and never join two statements with `and` or `;`
+  (the model copies the shape literally and writes invalid Python such as
+  `for ch in text.lower(): if ch.isalnum(): ...`). Branches are `- if ...:` and `- else:` bullets; an `if` that
+  needs two statements gets one nested `-` bullet per statement.
 * Put error checks first, in the order the examples test them.
+* **Keep a recipe short: at most 5 numbered lines and one loop.** A 0.8B model skips steps in a longer recipe
+  (a 6-line, two-loop `most_common_word` failed all 6 attempts: it replaced `best = order[0]` with
+  `best = None` and dropped an update). Split it instead: `word_counts(text)` in one step, then
+  `most_common_word(text)` using `word_counts` in the next. Thinking mode did not rescue it.
 * State tie-breaking explicitly ("if two words are used equally often, the one that appears first wins").
 * To use an earlier function write `Use line_total from totals/line.py (already written, shown below).` and put
   that file in `context`. Only name files that earlier steps create.
@@ -261,7 +269,7 @@ step by step and check the result is exact in floating point.
 ```
 
 More complete plans to copy the style from: `tests/examples/cart_totals.json` (steps that use earlier
-steps), `tests/examples/text_tools.json` (strings, loops, tie-breaking), `tests/examples/gradebook.json`
+steps), `tests/examples/text_tools.json` (strings, loops, a split of a hard step into `word_counts` + `most_common_word`), `tests/examples/gradebook.json`
 (branch chains, dict input, errors).
 
 ---
@@ -304,6 +312,7 @@ Go through every step and answer yes to each:
 - [ ] Data shapes are written out literally in the description.
 - [ ] Every branch and every `raises` has an example; each expected value was checked by hand.
 - [ ] No `null`, tuple, set or inexact float anywhere in the examples.
-- [ ] The body is at most about 8 lines, with at most one loop.
+- [ ] The body is at most about 8 lines, with at most one loop; the recipe has at most 5 numbered lines.
+- [ ] Every loop is on its own line with its statements as bullets underneath; no `and`/`;` joining statements.
 - [ ] Titles and commits are unique/valid; commit lines are at most 72 characters.
 - [ ] Everything that is not a pure function is listed under "Hand-written parts".
