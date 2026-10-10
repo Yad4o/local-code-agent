@@ -1,0 +1,963 @@
+{
+  "title": "Expense Manager Reports",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "filter_by_kind selects expenses or income",
+      "description": "Create filter_by_kind(transactions, kind) in expense_manager/filter_kind.py. transactions is a list of records shaped like {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use validate_kind from expense_manager/kinds.py (already written, shown below). Return a NEW list of copied records matching the kind.\n1. kind_ok = validate_kind(kind)\n2. return [dict(item) for item in transactions if item[\"kind\"] == kind]\n",
+      "commit": "feat: filter by transaction kind",
+      "tests": [
+        "tests/test_filter_kind.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/filter_kind.py"
+      ],
+      "context": [
+        "expense_manager/kinds.py"
+      ],
+      "function": "expense_manager.filter_kind:filter_by_kind",
+      "signature": "filter_by_kind(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "expense"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "income"
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [],
+            "transfer"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "filter_by_category selects a normalized category",
+      "description": "Create filter_by_category(transactions, category) in expense_manager/filter_category.py. Each transaction has the standard shape {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use normalize_category from expense_manager/categories.py (already written, shown below). Return a NEW list of copied records.\n1. normalized_category = normalize_category(category)\n2. return [dict(item) for item in transactions if item[\"category\"] == normalized_category]\n",
+      "commit": "feat: filter by category",
+      "tests": [
+        "tests/test_filter_category.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/filter_category.py"
+      ],
+      "context": [
+        "expense_manager/categories.py"
+      ],
+      "function": "expense_manager.filter_category:filter_by_category",
+      "signature": "filter_by_category(transactions, category)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 4000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            " FOOD "
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "food"
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [],
+            "  "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "filter_by_month selects an ISO calendar month",
+      "description": "Create filter_by_month(transactions, month) in expense_manager/filter_month.py. Transactions use the standard record shape with a date field formatted as YYYY-MM-DD. Return a NEW list of copied records.\n1. import re\n2. if re.fullmatch(r\"\\d{4}-(0[1-9]|1[0-2])\", month) is None: raise ValueError\n3. return [dict(item) for item in transactions if item[\"date\"].startswith(month + \"-\")]\n",
+      "commit": "feat: filter transactions by month",
+      "tests": [
+        "tests/test_filter_month.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/filter_month.py"
+      ],
+      "context": [],
+      "function": "expense_manager.filter_month:filter_by_month",
+      "signature": "filter_by_month(transactions, month)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-09-01",
+                "kind": "income"
+              }
+            ],
+            "2026-10"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "2026-10"
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [],
+            "2026-13"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            "October"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "filter_by_date_range selects inclusive dates",
+      "description": "Create filter_by_date_range(transactions, start_date, end_date) in expense_manager/filter_dates.py. Transactions use the standard record shape with a YYYY-MM-DD date. Use validate_date from expense_manager/dates.py (already written, shown below). Include transactions on both boundary dates.\n1. start_ok = validate_date(start_date)\n2. end_ok = validate_date(end_date)\n3. if start_date > end_date: raise ValueError\n4. return [dict(item) for item in transactions if start_date <= item[\"date\"] <= end_date]\n",
+      "commit": "feat: filter by date range",
+      "tests": [
+        "tests/test_filter_dates.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/filter_dates.py"
+      ],
+      "context": [
+        "expense_manager/dates.py"
+      ],
+      "function": "expense_manager.filter_dates:filter_by_date_range",
+      "signature": "filter_by_date_range(transactions, start_date, end_date)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 2000,
+                "category": "food",
+                "description": "lunch",
+                "date": "2026-10-11",
+                "kind": "expense"
+              }
+            ],
+            "2026-10-10",
+            "2026-10-10"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            "2026-10-01",
+            "2026-10-31"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "2026-10-31",
+            "2026-10-01"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "sum_amount totals records of a kind",
+      "description": "Create sum_amount(transactions, kind) in expense_manager/sum_amount.py. Transactions use the standard record shape. Use filter_by_kind from expense_manager/filter_kind.py (already written, shown below). Return the total amount_paise; return zero when no records match.\n1. selected = filter_by_kind(transactions, kind)\n2. return sum(item[\"amount_paise\"] for item in selected)\n",
+      "commit": "feat: total transaction amounts",
+      "tests": [
+        "tests/test_sum_amount.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/sum_amount.py"
+      ],
+      "context": [
+        "expense_manager/filter_kind.py"
+      ],
+      "function": "expense_manager.sum_amount:sum_amount",
+      "signature": "sum_amount(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 2000,
+                "category": "food",
+                "description": "lunch",
+                "date": "2026-10-11",
+                "kind": "expense"
+              },
+              {
+                "id": 3,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "expense"
+          ],
+          "expect": 3250
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 3,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "expense"
+          ],
+          "expect": 0
+        },
+        {
+          "args": [
+            [],
+            "income"
+          ],
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "title": "count_transactions counts a transaction kind",
+      "description": "Create count_transactions(transactions, kind) in expense_manager/count.py. Transactions use the standard record shape. Use filter_by_kind from expense_manager/filter_kind.py (already written, shown below).\n1. selected = filter_by_kind(transactions, kind)\n2. return len(selected)\n",
+      "commit": "feat: count transaction kinds",
+      "tests": [
+        "tests/test_count.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/count.py"
+      ],
+      "context": [
+        "expense_manager/filter_kind.py"
+      ],
+      "function": "expense_manager.count:count_transactions",
+      "signature": "count_transactions(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "expense"
+          ],
+          "expect": 1
+        },
+        {
+          "args": [
+            [],
+            "income"
+          ],
+          "expect": 0
+        },
+        {
+          "args": [
+            [],
+            "transfer"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "category_totals aggregates amounts by category",
+      "description": "Create category_totals(transactions, kind) in expense_manager/category_totals.py. Each transaction has the standard record shape. Use filter_by_kind from expense_manager/filter_kind.py (already written, shown below).\n1. selected = filter_by_kind(transactions, kind)\n2. totals = {}\n3. For each item in selected:\n   - if item[\"category\"] in totals: totals[item[\"category\"]] += item[\"amount_paise\"]\n   - else: totals[item[\"category\"]] = item[\"amount_paise\"]\n4. return totals\n",
+      "commit": "feat: aggregate category totals",
+      "tests": [
+        "tests/test_category_totals.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/category_totals.py"
+      ],
+      "context": [
+        "expense_manager/filter_kind.py"
+      ],
+      "function": "expense_manager.category_totals:category_totals",
+      "signature": "category_totals(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 2000,
+                "category": "food",
+                "description": "lunch",
+                "date": "2026-10-11",
+                "kind": "expense"
+              },
+              {
+                "id": 3,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-12",
+                "kind": "expense"
+              }
+            ],
+            "expense"
+          ],
+          "expect": {
+            "food": 3250,
+            "travel": 5000
+          }
+        },
+        {
+          "args": [
+            [],
+            "expense"
+          ],
+          "expect": {}
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "income"
+          ],
+          "expect": {
+            "salary": 50000
+          }
+        }
+      ]
+    },
+    {
+      "title": "monthly_summary calculates income expenses and balance",
+      "description": "Create monthly_summary(transactions, month) in expense_manager/monthly_summary.py. Transactions use the standard record shape. Use filter_by_month from expense_manager/filter_month.py and sum_amount from expense_manager/sum_amount.py (already written, shown below).\n1. month_items = filter_by_month(transactions, month)\n2. income_paise = sum_amount(month_items, \"income\")\n3. expense_paise = sum_amount(month_items, \"expense\")\n4. return {\"month\": month, \"income_paise\": income_paise, \"expense_paise\": expense_paise, \"balance_paise\": income_paise - expense_paise}\n",
+      "commit": "feat: calculate monthly summaries",
+      "tests": [
+        "tests/test_monthly_summary.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/monthly_summary.py"
+      ],
+      "context": [
+        "expense_manager/filter_month.py",
+        "expense_manager/sum_amount.py"
+      ],
+      "function": "expense_manager.monthly_summary:monthly_summary",
+      "signature": "monthly_summary(transactions, month)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            "2026-10"
+          ],
+          "expect": {
+            "month": "2026-10",
+            "income_paise": 50000,
+            "expense_paise": 1250,
+            "balance_paise": 48750
+          }
+        },
+        {
+          "args": [
+            [],
+            "2026-10"
+          ],
+          "expect": {
+            "month": "2026-10",
+            "income_paise": 0,
+            "expense_paise": 0,
+            "balance_paise": 0
+          }
+        },
+        {
+          "args": [
+            [],
+            "2026-13"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "total_balance subtracts expenses from income",
+      "description": "Create total_balance(transactions) in expense_manager/balance.py. Transactions use the standard record shape. Use sum_amount from expense_manager/sum_amount.py (already written, shown below).\n1. income_paise = sum_amount(transactions, \"income\")\n2. expense_paise = sum_amount(transactions, \"expense\")\n3. return income_paise - expense_paise\n",
+      "commit": "feat: calculate overall balance",
+      "tests": [
+        "tests/test_balance.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/balance.py"
+      ],
+      "context": [
+        "expense_manager/sum_amount.py"
+      ],
+      "function": "expense_manager.balance:total_balance",
+      "signature": "total_balance(transactions)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              },
+              {
+                "id": 2,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ]
+          ],
+          "expect": 48750
+        },
+        {
+          "args": [
+            []
+          ],
+          "expect": 0
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ]
+          ],
+          "expect": 50000
+        }
+      ]
+    },
+    {
+      "title": "budget_remaining calculates money left in a monthly budget",
+      "description": "Create budget_remaining(transactions, monthly_budget_paise, month) in expense_manager/budget_remaining.py. Transactions use the standard record shape. A budget is a non-negative integer number of paise. Use monthly_summary from expense_manager/monthly_summary.py (already written, shown below). Remaining money can be negative when spending exceeds the budget.\n1. if not isinstance(monthly_budget_paise, int) or isinstance(monthly_budget_paise, bool) or monthly_budget_paise < 0: raise ValueError\n2. summary = monthly_summary(transactions, month)\n3. return monthly_budget_paise - summary[\"expense_paise\"]\n",
+      "commit": "feat: calculate remaining budget",
+      "tests": [
+        "tests/test_budget_remaining.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/budget_remaining.py"
+      ],
+      "context": [
+        "expense_manager/monthly_summary.py"
+      ],
+      "function": "expense_manager.budget_remaining:budget_remaining",
+      "signature": "budget_remaining(transactions, monthly_budget_paise, month)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            5000,
+            "2026-10"
+          ],
+          "expect": 3750
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1000,
+            "2026-10"
+          ],
+          "expect": -250
+        },
+        {
+          "args": [
+            [],
+            0,
+            "2026-10"
+          ],
+          "expect": 0
+        },
+        {
+          "args": [
+            [],
+            -1,
+            "2026-10"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "budget_status reports spending against a budget",
+      "description": "Create budget_status(transactions, monthly_budget_paise, month) in expense_manager/budget_status.py. Transactions use the standard record shape. A budget is a non-negative integer number of paise. Use monthly_summary from expense_manager/monthly_summary.py (already written, shown below). over_budget is true only when expenses exceed the budget.\n1. if not isinstance(monthly_budget_paise, int) or isinstance(monthly_budget_paise, bool) or monthly_budget_paise < 0: raise ValueError\n2. summary = monthly_summary(transactions, month)\n3. remaining_paise = monthly_budget_paise - summary[\"expense_paise\"]\n4. return {\"month\": month, \"budget_paise\": monthly_budget_paise, \"spent_paise\": summary[\"expense_paise\"], \"remaining_paise\": remaining_paise, \"over_budget\": summary[\"expense_paise\"] > monthly_budget_paise}\n",
+      "commit": "feat: report monthly budget status",
+      "tests": [
+        "tests/test_budget_status.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/budget_status.py"
+      ],
+      "context": [
+        "expense_manager/monthly_summary.py"
+      ],
+      "function": "expense_manager.budget_status:budget_status",
+      "signature": "budget_status(transactions, monthly_budget_paise, month)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            5000,
+            "2026-10"
+          ],
+          "expect": {
+            "month": "2026-10",
+            "budget_paise": 5000,
+            "spent_paise": 1250,
+            "remaining_paise": 3750,
+            "over_budget": false
+          }
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1000,
+            "2026-10"
+          ],
+          "expect": {
+            "month": "2026-10",
+            "budget_paise": 1000,
+            "spent_paise": 1250,
+            "remaining_paise": -250,
+            "over_budget": true
+          }
+        },
+        {
+          "args": [
+            [],
+            0,
+            "2026-10"
+          ],
+          "expect": {
+            "month": "2026-10",
+            "budget_paise": 0,
+            "spent_paise": 0,
+            "remaining_paise": 0,
+            "over_budget": false
+          }
+        },
+        {
+          "args": [
+            [],
+            -1,
+            "2026-10"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "top_category finds the highest total and breaks ties alphabetically",
+      "description": "Create top_category(transactions, kind) in expense_manager/top_category.py. Each transaction uses the standard record shape. Use category_totals from expense_manager/category_totals.py (already written, shown below). If multiple categories have equal totals, return the alphabetically first category. Raise ValueError when there are no matching records.\n1. totals = category_totals(transactions, kind)\n2. if len(totals) == 0: raise ValueError\n3. best = None\n4. For each category in sorted(totals):\n   - if best is None or totals[category] > totals[best]: best = category\n5. return best\n",
+      "commit": "feat: find top transaction category",
+      "tests": [
+        "tests/test_top_category.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/top_category.py"
+      ],
+      "context": [
+        "expense_manager/category_totals.py"
+      ],
+      "function": "expense_manager.top_category:top_category",
+      "signature": "top_category(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-12",
+                "kind": "expense"
+              },
+              {
+                "id": 3,
+                "amount_paise": 3750,
+                "category": "food",
+                "description": "lunch",
+                "date": "2026-10-13",
+                "kind": "expense"
+              }
+            ],
+            "expense"
+          ],
+          "expect": "food"
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 400,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 400,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            "expense"
+          ],
+          "expect": "food"
+        },
+        {
+          "args": [
+            [],
+            "expense"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "largest_transaction finds the biggest matching record",
+      "description": "Create largest_transaction(transactions, kind) in expense_manager/largest.py. Transactions use the standard record shape. Use filter_by_kind from expense_manager/filter_kind.py (already written, shown below). When amounts tie, choose the record with the smallest ID. Raise ValueError if no records match.\n1. selected = filter_by_kind(transactions, kind)\n2. if len(selected) == 0: raise ValueError\n3. ordered = sorted(selected, key=lambda item: (-item[\"amount_paise\"], item[\"id\"]))\n4. return dict(ordered[0])\n",
+      "commit": "feat: find largest transaction",
+      "tests": [
+        "tests/test_largest.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/largest.py"
+      ],
+      "context": [
+        "expense_manager/filter_kind.py"
+      ],
+      "function": "expense_manager.largest:largest_transaction",
+      "signature": "largest_transaction(transactions, kind)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-12",
+                "kind": "expense"
+              }
+            ],
+            "expense"
+          ],
+          "expect": {
+            "id": 2,
+            "amount_paise": 5000,
+            "category": "travel",
+            "description": "bus",
+            "date": "2026-10-12",
+            "kind": "expense"
+          }
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 5,
+                "amount_paise": 5000,
+                "category": "food",
+                "description": "lunch",
+                "date": "2026-10-11",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-12",
+                "kind": "expense"
+              }
+            ],
+            "expense"
+          ],
+          "expect": {
+            "id": 2,
+            "amount_paise": 5000,
+            "category": "travel",
+            "description": "bus",
+            "date": "2026-10-12",
+            "kind": "expense"
+          }
+        },
+        {
+          "args": [
+            [],
+            "income"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    }
+  ]
+}

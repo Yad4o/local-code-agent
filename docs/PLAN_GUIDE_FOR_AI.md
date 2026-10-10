@@ -171,6 +171,10 @@ Rules:
   `2. if category == "": raise ValueError` failed all 6 attempts: the model folded step 1 into the return and checked
   the untrimmed text. `1. cleaned = category.strip().lower()`, `2. if cleaned == "": raise ValueError`,
   `3. return cleaned` leaves nothing to fold.
+* **A standard-library import is its own first recipe line**: `1. import re` (several: `1. import re, decimal`), so the
+  model does not forget it. The harness moves it to the top of the module.
+* For tie-breaking ("alphabetically first", "smallest ID") a short loop over `sorted(...)` with a strict `>` is easier
+  for a small model than a `sorted(..., key=lambda x: (-x["amount"], x["id"]))` with a negated key.
 * **Assign the result of a helper call even when you only want its error**: `found = find_transaction(transactions,
   transaction_id)`, not a bare `find_transaction(...)` line. A line whose value is never used looks optional to a
   small model, and it drops the line (it dropped `raise KeyError` checks twice).

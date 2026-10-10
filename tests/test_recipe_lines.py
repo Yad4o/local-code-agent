@@ -51,3 +51,9 @@ def test_the_retry_prompt_names_the_missing_line(tmp_path):
            log=lambda m: None, sleep=lambda s: None, should_stop=lambda: False).run()
     assert "cleaned = text.strip().lower()" in str(llm.calls[1][-1]["content"])
     assert "missing from your body" in str(llm.calls[1][-1]["content"])
+
+
+def test_import_lines_are_never_reported_because_they_are_moved_to_the_top_of_the_module():
+    desc = "1. import re, decimal\n2. if re.fullmatch(r'a', text) is None: raise ValueError\n3. return 1"
+    body = "if re.fullmatch(r'a', text) is None:\n    raise ValueError\nreturn 1"
+    assert missing_recipe_lines(desc, body) == []
