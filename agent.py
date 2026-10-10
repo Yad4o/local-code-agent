@@ -2112,8 +2112,12 @@ class Runner:
                     report.results.append(StepResult(step.title, "paused", reason="stop requested"))
                     break
                 if state.is_done(self.plan, step):
-                    report.results.append(StepResult(step.title, "skipped"))
-                    continue
+                    gone = [f for f in (*step.files, *step.tests) if not (self._read_many([f])[f] or "").strip()
+                            and not f.endswith("__init__.py")]
+                    if not gone:
+                        report.results.append(StepResult(step.title, "skipped"))
+                        continue
+                    self.log(f"== step: {step.title}: marked done, but {', '.join(gone)} missing or empty; running it again")
                 self.log(f"== step: {step.title}")
                 result = self._run_step(step)
                 self.log(f"   -> {result.status} {result.reason}".rstrip())
