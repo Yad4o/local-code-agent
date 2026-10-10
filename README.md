@@ -124,6 +124,12 @@ burning all `num_predict` tokens. That counts as a failed attempt, not a pause: 
 temperature, a note saying what went wrong, and **thinking switched off** for that call. Switch the guard off
 with `CODEAGENT_LOOP_GUARD=false`. Whatever streamed in before a stop is still saved in `transcript.md`.
 
+Writing a function body does **not** think by default (`CODEAGENT_THINK_BODY=false`, with
+`CODEAGENT_TEMPERATURE_NO_THINK=0.3`): in a real run a 0.8B model spent 4-5 minutes wandering in its thinking
+for a 5-line body, while the same call without thinking answered in 8 seconds. Set `CODEAGENT_THINK_BODY=true`
+to bring thinking back. The harness also writes the `from pkg.mod import name` lines for every context function
+named in the step description, and always puts the planned signature back if the model rewrote the def line.
+
 Settings that matter for loops: `CODEAGENT_TEMPERATURE` (about 0.6 for thinking models; too low loops more),
 `CODEAGENT_TOP_P` / `CODEAGENT_TOP_K` (0.95 / 20 by default), `CODEAGENT_REPEAT_PENALTY` (1.1),
 `CODEAGENT_NUM_PREDICT`. `CODEAGENT_THINK_LEVEL` only affects gpt-oss models; other models think on or off.

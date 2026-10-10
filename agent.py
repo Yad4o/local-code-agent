@@ -482,6 +482,9 @@ class Config:
     num_predict_tests: int = 8192               # smaller cap while writing tests
     num_predict_body: int = 8192                # cap when the model only writes a function body (skeleton mode)
     temperature: float = 0.2
+    think_body: bool = False                    # False: a function body is written without thinking (a 0.8B model
+                                                # that thinks about a 5-line body wanders for minutes and answers worse)
+    temperature_no_think: float = 0.3           # temperature for calls that run without thinking
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
     top_p: float = 0.95                         # sampling cut-offs recommended for Qwen; 0 = leave to the server
     top_k: int = 20
@@ -1163,9 +1166,41 @@ def init_source(step: Step, init_path: str) -> str:
     return f"from .{rest} import {_function_name(step)}\n"
 
 
-def assemble_module(step: Step, body: str) -> tuple[str | None, str | None]:
-    """(source, None) or (None, problem). Accepts a bare body; also a whole `def` if the model wrote one."""
+def _top_level_names(source: str) -> list[str]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    return [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+
+
+def context_imports(step: Step, sources: dict[str, str | None]) -> list[str]:
+    """`from pkg.mod import name` for every function the step's description names from its context files:
+    the harness writes the imports, the model only writes the body (and so cannot forget them)."""
+    own = module_path(step) if step.function else ""
+    out = []
+    for path in step.context:
+        src = sources.get(path)
+        if not src or not path.endswith(".py") or path.endswith("__init__.py") or path == own:
+            continue
+        module = path[:-3].replace("/", ".")
+        for name in _top_level_names(src):
+            if re.search(rf"\b{re.escape(name)}\b", step.description) and name != (_function_name(step) if step.function else ""):
+                out.append(f"from {module} import {name}")
+    return out
+
+
+def _with_imports(source: str, extra: list[str]) -> str:
+    have = {ln.strip() for ln in source.splitlines()}
+    add = [ln for ln in extra if ln not in have]
+    return "\n".join(add) + "\n" + source if add else source
+
+
+def assemble_module(step: Step, body: str, imports: list[str] | None = None) -> tuple[str | None, str | None]:
+    """(source, None) or (None, problem). Accepts a bare body; also a whole `def` if the model wrote one,
+    but then the planned signature is put back: the model does not get to change it."""
     name = _function_name(step)
+    extra = imports or []
     text = textwrap.dedent(body).strip("\n")
     if not text.strip():
         return None, "the function body is empty; write the lines that go inside the function"
@@ -1173,14 +1208,23 @@ def assemble_module(step: Step, body: str) -> tuple[str | None, str | None]:
         tree = ast.parse(text)
     except SyntaxError:
         tree = None
-    if tree and any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in tree.body):
-        return text + "\n", None
+    if tree:
+        node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+        if node is not None:
+            planned = ast.parse(f"def {step.signature}:\n    pass\n").body[0] if step.signature else None
+            if isinstance(planned, ast.FunctionDef):
+                node.args, node.returns, node.decorator_list = planned.args, planned.returns, []
+                return _with_imports(ast.unparse(ast.fix_missing_locations(tree)) + "\n", extra), None
+            return _with_imports(text + "\n", extra), None
+        if any(isinstance(n, ast.AsyncFunctionDef) and n.name == name for n in tree.body):
+            return _with_imports(text + "\n", extra), None
     lines = text.splitlines()
     i = 0
     while i < len(lines) and re.match(r"(import|from)\s+\S", lines[i]):
         i += 1                                           # leading imports belong at the top of the module
-    imports, rest = lines[:i], lines[i:]
-    src = "\n".join([*imports, "", f"def {step.signature}:", *[("    " + l) if l.strip() else "" for l in rest], ""])
+    imps, rest = lines[:i], lines[i:]
+    imps = [*[e for e in extra if e not in imps], *imps]
+    src = "\n".join([*imps, "", f"def {step.signature}:", *[("    " + l) if l.strip() else "" for l in rest], ""])
     try:
         ast.parse(src)
     except SyntaxError as e:
@@ -1188,12 +1232,12 @@ def assemble_module(step: Step, body: str) -> tuple[str | None, str | None]:
     return src, None
 
 
-def assemble_files(step: Step, got: dict[str, str],
-                   existing_inits: dict[str, str | None] | None = None) -> tuple[dict[str, str], list[str]]:
+def assemble_files(step: Step, got: dict[str, str], existing_inits: dict[str, str | None] | None = None,
+                   context_sources: dict[str, str | None] | None = None) -> tuple[dict[str, str], list[str]]:
     """Turn the model's body into the complete set of files the step owns. A package `__init__.py` that
     earlier steps already filled keeps its lines; this step's re-export is added to it."""
     path = module_path(step)
-    source, problem = assemble_module(step, got.get(path, ""))
+    source, problem = assemble_module(step, got.get(path, ""), context_imports(step, context_sources or {}))
     if problem:
         return {}, [problem]
     files = {path: source}
@@ -1799,6 +1843,9 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
     ctx = {p: existing.get(p) for p in step.context}
     if any(v is not None for v in ctx.values()):
         parts.append("Related files (read-only):\n" + _fit(ctx, budget // 2))
+    ready = [ln.rsplit(" import ", 1)[1] for ln in context_imports(step, existing)]
+    if ready:
+        parts.append("Already imported for you: " + ", ".join(ready) + ". Do not write imports for them.")
     prev = function_body(existing.get(path) or "", name)
     if prev and prev.strip() != "pass":
         parts.append("Your previous body, which failed (do not repeat it):\n```python\n" + prev[:budget // 2] + "\n```")
@@ -2131,7 +2178,7 @@ class Runner:
         seen: dict[str, int] = {}                        # code we already tried -> attempt number
         fresh = False                                    # next prompt hides the previous code (anti-anchoring)
         repeats = 0                                      # how many times the model repeated itself
-        quiet = False                                    # after a loop / empty answer: retry without thinking
+        quiet = bool(step.signature) and self.cfg.think and not self.cfg.think_body   # a body is written without thinking
         if step.signature:
             output, satisfied = self._reset_skeleton(step, tests, output)
             if satisfied:
@@ -2154,7 +2201,7 @@ class Runner:
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
                 if not problems:
                     inits = {f: self._read_many([f])[f] for f in step.files if f.endswith("__init__.py")}
-                    files, problems = assemble_files(step, files, inits)
+                    files, problems = assemble_files(step, files, inits, self._read_many(step.context))
             else:
                 files, problems = self._collect(text, step.files)
             if not problems:
@@ -2208,11 +2255,12 @@ class Runner:
             return output, False
         return res.output, res.ok
 
-    def _retry_temperature(self, attempt: int, bump: float = 0.0) -> float:
+    def _retry_temperature(self, attempt: int, bump: float = 0.0, base: float | None = None) -> float:
         """Attempt 1 uses the configured temperature; retries warm up only a little, and never past
         the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
-        ceiling = max(self.cfg.temperature, self.cfg.max_retry_temperature)
-        t = min(self.cfg.temperature + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
+        base = self.cfg.temperature if base is None else base
+        ceiling = max(base, self.cfg.max_retry_temperature)
+        t = min(base + self.cfg.retry_temperature_step * (attempt - 1), ceiling)
         return min(t + bump, max(ceiling, 0.7)) if bump else t     # repeating itself earns a warmer retry
 
     def _static_check(self, paths: list[str]) -> list[str]:
@@ -2261,7 +2309,8 @@ class Runner:
             if self.should_stop():
                 raise _Pause("stop requested")
             raise _Pause("system resources stayed too low; will retry later")
-        temperature = self._retry_temperature(attempt, bump)
+        temperature = self._retry_temperature(attempt, bump, self.cfg.temperature_no_think
+                                              if (think is False and self.cfg.think) else None)
         started = time.monotonic()
         self.log(f"   asking the model ({phase}, attempt {attempt}, think={(False if think is False else think_value(self.cfg))!r}); "
                  "a reasoning model can be silent for minutes")
