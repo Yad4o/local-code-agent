@@ -164,6 +164,9 @@ Rules:
   `for ch in text.lower(): if ch.isalnum(): ...`). Branches are `- if ...:` and `- else:` bullets; an `if` that
   needs two statements gets one nested `-` bullet per statement.
 * Put error checks first, in the order the examples test them.
+* **Write checks and early returns as code, not English.** `2. if len(text) <= limit: return text` is followed;
+  `2. If the text already fits, return it.` was skipped on all 6 attempts (the model kept the other two lines and
+  dropped that one). Use real conditions (`if len(scores) == 0: raise ValueError`), one short statement after the colon.
 * **Keep a recipe short: at most 5 numbered lines and one loop.** A 0.8B model skips steps in a longer recipe
   (a 6-line, two-loop `most_common_word` failed all 6 attempts: it replaced `best = order[0]` with
   `best = None` and dropped an update). Split it instead: `word_counts(text)` in one step, then

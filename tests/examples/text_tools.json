@@ -162,7 +162,7 @@
     },
     {
       "title": "most_common_word finds the word used most",
-      "description": "Create most_common_word(text) in texttools/common.py. Use word_counts from texttools/counts.py (already written, shown below). If two words are used equally often, the one that appears first wins.\n1. If text.split() is empty, raise ValueError.\n2. counts = word_counts(text)\n3. best = None\n4. For each word in counts:\n   - if best is None or counts[word] > counts[best]:\n     - best = word\n5. return best\n",
+      "description": "Create most_common_word(text) in texttools/common.py. Use word_counts from texttools/counts.py (already written, shown below). If two words are used equally often, the one that appears first wins.\n1. if len(text.split()) == 0: raise ValueError\n2. counts = word_counts(text)\n3. best = None\n4. For each word in counts:\n   - if best is None or counts[word] > counts[best]:\n     - best = word\n5. return best\n",
       "commit": "feat: add most_common_word",
       "tests": [
         "tests/test_common.py"
@@ -211,7 +211,7 @@
     },
     {
       "title": "truncate shortens long text with three dots",
-      "description": "Create truncate(text, limit) in texttools/trunc.py.\n1. If limit is less than 3, raise ValueError.\n2. If len(text) <= limit, return text.\n3. return text[:limit - 3] + \"...\"\n",
+      "description": "Create truncate(text, limit) in texttools/trunc.py.\n1. if limit < 3: raise ValueError\n2. if len(text) <= limit: return text\n3. return text[:limit - 3] + \"...\"\n",
       "commit": "feat: add truncate",
       "tests": [
         "tests/test_trunc.py"
