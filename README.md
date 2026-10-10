@@ -115,6 +115,19 @@ The model's thinking is included too when you run with `--live` (that is when it
 less $W/.codeagent/transcript.md
 ```
 
+### When the model loops
+
+Small thinking models sometimes go round in circles (a phrase again and again, or a whole paragraph).
+Every call is now streamed, and a loop guard watches it: if the model repeats itself, or thinks for more than
+`CODEAGENT_MAX_THINK_CHARS` (default 8000) without starting an answer, the call is stopped at once instead of
+burning all `num_predict` tokens. That counts as a failed attempt, not a pause: the next attempt gets a warmer
+temperature, a note saying what went wrong, and **thinking switched off** for that call. Switch the guard off
+with `CODEAGENT_LOOP_GUARD=false`. Whatever streamed in before a stop is still saved in `transcript.md`.
+
+Settings that matter for loops: `CODEAGENT_TEMPERATURE` (about 0.6 for thinking models; too low loops more),
+`CODEAGENT_TOP_P` / `CODEAGENT_TOP_K` (0.95 / 20 by default), `CODEAGENT_REPEAT_PENALTY` (1.1),
+`CODEAGENT_NUM_PREDICT`. `CODEAGENT_THINK_LEVEL` only affects gpt-oss models; other models think on or off.
+
 
 ```bash
 W=~/agent-projects/demo                                   # your --workspace

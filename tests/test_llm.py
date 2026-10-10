@@ -33,7 +33,8 @@ def test_ollama_chat_sends_expected_payload_and_returns_content(stub):
     assert body["stream"] is False
     assert body["think"] is True                       # agentic coding: the model reasons before it writes
     assert body["keep_alive"] == "5m"
-    assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1, "repeat_penalty": 1.1}
+    assert body["options"] == {"num_ctx": 2048, "num_predict": 300, "temperature": 0.1, "repeat_penalty": 1.1,
+                               "top_p": 0.95, "top_k": 20}
 
 
 def test_thinking_can_be_switched_off_and_gpt_oss_gets_a_level(stub):

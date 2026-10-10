@@ -483,6 +483,10 @@ class Config:
     num_predict_body: int = 8192                # cap when the model only writes a function body (skeleton mode)
     temperature: float = 0.2
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
+    top_p: float = 0.95                         # sampling cut-offs recommended for Qwen; 0 = leave to the server
+    top_k: int = 20
+    loop_guard: bool = True                     # stop a reply that is repeating itself (streamed calls only)
+    max_think_chars: int = 8000                 # stop a call that thinks this long with no answer; 0 = unlimited
     retry_temperature_step: float = 0.05        # each retry runs this much hotter (small models get worse when hot)
     max_retry_temperature: float = 0.4          # retries never go hotter than this (or `temperature`, if higher)
     keep_alive: str = "30m"                     # keep model loaded between calls
@@ -1379,10 +1383,81 @@ class LLMError(Exception):
     pass
 
 
+class NoAnswer(LLMError):
+    """The model finished or was stopped without writing a usable answer (ran out of tokens, or looped)."""
+
+
+class LoopGuard:
+    """Watches a streamed reply and says when it is going round in circles, so the call can be cut short
+    instead of burning all num_predict tokens. Catches small loops (a phrase again and again), big loops
+    (a whole paragraph again), the same line coming back, and endless thinking with no answer."""
+
+    WINDOW = 8000
+
+    def __init__(self, max_think_chars: int = 0):
+        self.max_think_chars = max_think_chars
+        self.text = {"thinking": "", "content": ""}
+        self.thinking_total = 0
+        self.answering = False
+        self._since = 0
+
+    def feed(self, kind: str, piece: str) -> str | None:
+        if kind not in self.text:
+            return None
+        self.text[kind] = (self.text[kind] + piece)[-self.WINDOW:]
+        if kind == "content":
+            self.answering = self.answering or bool(piece.strip())
+        else:
+            self.thinking_total += len(piece)
+            if self.max_think_chars and not self.answering and self.thinking_total > self.max_think_chars:
+                return f"thought for more than {self.max_think_chars} characters without answering"
+        self._since += len(piece)
+        if self._since < 60:
+            return None
+        self._since = 0
+        if self._repeating_tail(self.text[kind], 4 if kind == "content" else 3):
+            return "the model started repeating itself"
+        if self._repeated_lines(self.text[kind], 12 if kind == "content" else 8):
+            return "the model keeps writing the same line again and again (repeating itself)"
+        return None
+
+    @staticmethod
+    def _repeating_tail(text: str, min_reps: int) -> bool:
+        for p in range(8, len(text) // min_reps + 1):
+            reps = max(min_reps, -(-100 // p))
+            if len(text) < reps * p:
+                continue
+            unit = text[-p:]
+            if len(set(unit.strip())) > 3 and text[-p * reps:] == unit * reps:
+                return True
+        return False
+
+    @staticmethod
+    def _repeated_lines(text: str, limit: int) -> bool:
+        counts: dict[str, int] = {}
+        for line in text.splitlines()[-80:]:
+            line = line.strip()
+            if len(line) >= 12 and len(set(line)) > 3:
+                counts[line] = counts.get(line, 0) + 1
+                if counts[line] >= limit:
+                    return True
+        return False
+
+
 class Reply(str):
-    """The model's text. `.truncated` is True if it hit the token limit (it was cut off)."""
+    """The model's text. `.truncated` is True if it hit the token limit (it was cut off).
+    `.no_answer` is a message for the model when there was no usable answer at all."""
 
     truncated: bool = False
+    no_answer: str = ""
+
+
+def _no_answer_feedback(e: Exception) -> str:
+    if "repeat" in str(e):
+        return ("your last attempt got stuck repeating itself and was stopped. "
+                "Do not repeat yourself: decide quickly, then write the answer.")
+    return ("your last attempt ran out of time while thinking and wrote no answer. "
+            "Think only a few short lines, then write the answer straight away.")
 
 
 def _reply(text: str, truncated: bool) -> Reply:
@@ -1394,7 +1469,7 @@ def _reply(text: str, truncated: bool) -> Reply:
 class LLMClient(Protocol):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
              num_predict: int | None = None, stop: list[str] | None = None,
-             on_token: Callable[[str, str], None] | None = None) -> str: ...
+             on_token: Callable[[str, str], None] | None = None, think: bool | None = None) -> str: ...
 
 
 def _check_url(cfg: Config) -> str:
@@ -1424,7 +1499,7 @@ class _BaseClient:
         self.retries = retries
 
     def _request(self, path: str, payload: dict | None,
-                 on_chunk: Callable[[str, str], None] | None = None) -> dict:
+                 on_chunk: Callable[[str, str], None] | None = None, guard: LoopGuard | None = None) -> dict:
         data = json.dumps(payload).encode() if payload is not None else None
         req = urllib.request.Request(
             self.base + path, data=data, method="POST" if payload is not None else "GET",
@@ -1437,7 +1512,7 @@ class _BaseClient:
             try:
                 with urllib.request.urlopen(req, timeout=self.cfg.request_timeout) as resp:
                     if on_chunk:
-                        return self._read_stream(resp, on_chunk)
+                        return self._read_stream(resp, on_chunk, guard)
                     raw = resp.read()
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", "replace")[:300]
@@ -1467,9 +1542,10 @@ class _BaseClient:
         raise last  # type: ignore[misc]
 
     @staticmethod
-    def _read_stream(resp, on_chunk: Callable[[str, str], None]) -> dict:
-        """Read Ollama's line-by-line stream, show each piece as it arrives, return the usual one-piece reply."""
-        content, thinking, last = [], [], {}
+    def _read_stream(resp, on_chunk: Callable[[str, str], None], guard: LoopGuard | None = None) -> dict:
+        """Read Ollama's line-by-line stream, show each piece as it arrives, return the usual one-piece reply.
+        If the guard says the model is looping, stop reading: closing the connection stops the generation."""
+        content, thinking, last, aborted = [], [], {}, None
         for line in resp:
             if not line.strip():
                 continue
@@ -1480,15 +1556,19 @@ class _BaseClient:
             if chunk.get("error"):
                 raise LLMError(f"model server error: {chunk['error']}")
             msg = chunk.get("message") or {}
-            if msg.get("thinking"):
-                thinking.append(msg["thinking"])
-                on_chunk("thinking", msg["thinking"])
-            if msg.get("content"):
-                content.append(msg["content"])
-                on_chunk("content", msg["content"])
+            for kind, store in (("thinking", thinking), ("content", content)):
+                if msg.get(kind):
+                    store.append(msg[kind])
+                    on_chunk(kind, msg[kind])
+                    aborted = guard.feed(kind, msg[kind]) if guard else None
+                    if aborted:
+                        break
             last = chunk
+            if aborted:
+                break
         return {"message": {"role": "assistant", "content": "".join(content), "thinking": "".join(thinking)},
-                "done_reason": last.get("done_reason"), "eval_count": last.get("eval_count"), "done": last.get("done")}
+                "done_reason": "length" if aborted else last.get("done_reason"), "aborted": aborted,
+                "eval_count": last.get("eval_count"), "done": last.get("done")}
 
     @staticmethod
     def _finish(text, truncated: bool = False) -> Reply:
@@ -1516,13 +1596,18 @@ def _cut_at_stop(text: str, stop: list[str] | None) -> str:
 class OllamaClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
              num_predict: int | None = None, stop: list[str] | None = None,
-             on_token: Callable[[str, str], None] | None = None) -> Reply:
+             on_token: Callable[[str, str], None] | None = None, think: bool | None = None) -> Reply:
         c = self.cfg
-        think = think_value(c)
+        think = False if think is False else think_value(c)       # think=False: this one call answers without thinking
         options = {"num_ctx": c.num_ctx,
                    "num_predict": num_predict if num_predict is not None else c.num_predict,
                    "temperature": temperature if temperature is not None else c.temperature,
                    "repeat_penalty": c.repeat_penalty}
+        if c.top_p:
+            options["top_p"] = c.top_p
+        if c.top_k:
+            options["top_k"] = c.top_k
+        guard = LoopGuard(c.max_think_chars) if (c.loop_guard and on_token) else None
         if stop and not think:
             options["stop"] = stop      # while thinking, the model's reasoning can contain the marker and end the reply early
         data = self._request("/api/chat", {
@@ -1530,14 +1615,16 @@ class OllamaClient(_BaseClient):
             "think": think,
             "keep_alive": c.keep_alive,
             "options": options,
-        }, on_chunk=on_token)
+        }, on_chunk=on_token, guard=guard)
         try:
             msg = data["message"]
             content = _cut_at_stop(str(msg.get("content") or ""), stop)
             reason = data.get("done_reason")
             if not strip_thinking(content):
                 thinking = str(msg.get("thinking") or "")
-                raise LLMError(
+                if data.get("aborted"):
+                    raise NoAnswer(f"{data['aborted']} and was stopped ({len(thinking)} thinking chars, no answer)")
+                raise NoAnswer(
                     f"the model sent no answer (think={think!r}, done_reason={reason!r}, "
                     f"{data.get('eval_count', '?')} tokens, num_predict={options['num_predict']}, "
                     f"answer chars={len(content)}, thinking chars={len(thinking)}"
@@ -1555,7 +1642,8 @@ class OllamaClient(_BaseClient):
 class OpenAIClient(_BaseClient):
     def chat(self, messages: list[dict], *, temperature: float | None = None,
              num_predict: int | None = None, stop: list[str] | None = None,
-             on_token: Callable[[str, str], None] | None = None) -> Reply:       # on_token: not streamed on this backend
+             on_token: Callable[[str, str], None] | None = None,       # on_token: not streamed on this backend
+             think: bool | None = None) -> Reply:
         c = self.cfg
         payload = {
             "model": c.model, "messages": messages, "stream": False,
@@ -1564,7 +1652,7 @@ class OpenAIClient(_BaseClient):
         }
         if stop:
             payload["stop"] = stop
-        payload["chat_template_kwargs"] = {"enable_thinking": c.think}   # llama.cpp; other servers ignore it
+        payload["chat_template_kwargs"] = {"enable_thinking": c.think and think is not False}   # llama.cpp; other servers ignore it
         data = self._request("/v1/chat/completions", payload)
         try:
             choice = data["choices"][0]
@@ -1613,6 +1701,55 @@ Rules:
 - An empty file is a block with nothing inside the fence."""
 
 
+_E_NOISE = ("assert ", "At index", "Use -v", "Right contains", "Left contains", "Full diff", "Differing",
+            "Omitting", "Extra items", "Drill down", "Full output")
+
+
+def condense_test_output(output: str, limit: int = 1500, max_failures: int = 8) -> str:
+    """What the model needs from a pytest run: one line per failing test (its own message, which already says
+    what was returned and what was expected) and the summary line; none of pytest's repeated diff noise."""
+    lines = [ln for ln in output.splitlines() if not ln.startswith("...[output truncated")]
+    head = re.compile(r"^_{2,} (.+?) _{2,}$")
+    found: list[str] = []
+    test, seen = "", set()
+    for line in lines:
+        m = head.match(line)
+        if m:
+            test = m.group(1)
+            continue
+        if not (line.startswith("E ") or line == "E"):
+            continue
+        msg = line[1:].strip()
+        if not msg or msg.startswith(_E_NOISE) or msg[0] in "+-?" or (test, "x") in seen:
+            continue
+        seen.add((test, "x"))
+        found.append(f"{test + ': ' if test else ''}{msg[:500]}")
+    summary = next((ln.strip() for ln in reversed(lines) if re.search(r"\d+ (failed|passed|error)", ln)), "")
+    if not found:
+        text = "\n".join(lines).strip()
+        if len(text) > limit:
+            text = text[-limit:]
+            text = text[text.find("\n") + 1:] if "\n" in text else text
+        return text
+    if len(found) > max_failures:
+        found = found[:max_failures] + [f"... and {len(found) - max_failures} more failing tests"]
+    out = "\n".join(found + ([summary] if summary else []))
+    return out if len(out) <= limit else out[:limit].rsplit("\n", 1)[0]
+
+
+def function_body(source: str, name: str) -> str | None:
+    """The lines inside `def name(...)`, dedented, or None if there is no such function."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            lines = source.splitlines()[node.body[0].lineno - 1: node.end_lineno]
+            return textwrap.dedent("\n".join(lines)).strip("\n")
+    return None
+
+
 def _fit(files: dict[str, str | None], budget: int) -> str:
     """Render files as FILE blocks, sharing `budget` characters between them."""
     present = {p: c for p, c in files.items() if c is not None}
@@ -1625,6 +1762,53 @@ def _fit(files: dict[str, str | None], budget: int) -> str:
             content = content[:share].rstrip() + "\n# ... (truncated)\n"
         out.append(f"FILE: {path}\n```\n{content}{'' if content.endswith(chr(10)) or not content else chr(10)}```")
     return "\n\n".join(out)
+
+
+SYSTEM_BODY = """You are a careful programmer. You write small, correct, working code.
+
+You are given a function signature. Reply with ONLY the lines that go inside the function, in exactly this format, and nothing else:
+
+FILE: path/to/file.py
+```python
+<body lines only>
+```
+
+Rules:
+- Write only the body: no def line, no docstring, no comments, no explanation.
+- Imports the body needs go first, before the body lines.
+- Do exactly what the description says: no extra validation, no type checks, no extra features.
+- Keep it short. Do not think for long: decide, then write the body."""
+
+
+def _example_line(name: str, ex: Example) -> str:
+    call = _call(name, ex)
+    return f"- {call} raises {ex.raises}" if ex.raises else f"- {call} -> {ex.expect!r}"
+
+
+def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
+                      budget: int, test_output: str | None, feedback: str | None) -> list[dict]:
+    """Skeleton mode: the model sees the task, the def line, the examples, how its last body failed, and
+    what the tests said. Never the pytest file, the package __init__, or a whole module with a def line."""
+    path, name = module_path(step), _function_name(step)
+    parts = [_header(plan, step),
+             f"The function line is already written. Write ONLY its body:\n\ndef {step.signature}:\n    ..."]
+    if step.examples:
+        parts.append("The tests check exactly these examples:\n" + "\n".join(_example_line(name, e)[:300] for e in step.examples))
+    else:
+        parts.append("These tests must pass:\n" + _fit(dict(tests), budget // 2))
+    ctx = {p: existing.get(p) for p in step.context}
+    if any(v is not None for v in ctx.values()):
+        parts.append("Related files (read-only):\n" + _fit(ctx, budget // 2))
+    prev = function_body(existing.get(path) or "", name)
+    if prev and prev.strip() != "pass":
+        parts.append("Your previous body, which failed (do not repeat it):\n```python\n" + prev[:budget // 2] + "\n```")
+    if test_output:
+        parts.append("What the tests reported:\n" + condense_test_output(test_output))
+    if feedback:
+        parts.append("Problem with your previous answer, fix it:\n" + feedback)
+    parts.append("Reply with ONLY this, the body lines and nothing else (no def line, no docstring, "
+                 f"no comments, no explanation):\nFILE: {path}\n```python\n<body lines>\n```")
+    return [{"role": "system", "content": SYSTEM_BODY}, {"role": "user", "content": "\n\n".join(parts)}]
 
 
 def _header(plan: Plan, step: Step) -> str:
@@ -1655,15 +1839,13 @@ def build_tests_prompt(plan: Plan, step: Step, existing: dict[str, str | None], 
 
 def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
                   budget: int, test_output: str | None, feedback: str | None) -> list[dict]:
+    if step.signature:
+        return build_body_prompt(plan, step, tests, existing, budget, test_output, feedback)
     parts = [
         _header(plan, step),
         "These tests must pass. Do NOT change the tests:\n" + _fit(dict(tests), budget // 2),
+        f"Write the implementation file(s): {', '.join(step.files)}",
     ]
-    if step.signature:
-        path = step.function.split(":")[0].replace(".", "/") + ".py"
-        parts.append(f"The function line is already written. Write ONLY its body:\n\ndef {step.signature}:\n    ...")
-    else:
-        parts.append(f"Write the implementation file(s): {', '.join(step.files)}")
     if step.function:
         module, name = step.function.split(":")
         parts.append(f"The tests call `{name}` imported from {module}: define exactly `def {name}(...)` "
@@ -1672,13 +1854,9 @@ def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
     if any(v is not None for v in cur.values()):
         parts.append("Current content of the files:\n" + _fit(cur, budget // 2))
     if test_output:
-        parts.append("Result of running the tests (fix what fails):\n" + test_output.strip())
+        parts.append("Result of running the tests (fix what fails):\n" + condense_test_output(test_output))
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
-    if step.signature:
-        parts.append(f"Reply with ONLY this, the body lines and nothing else (no def line, no docstring, "
-                     f"no comments, no explanation):\nFILE: {path}\n```python\n<body lines>\n```")
-        return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
     parts.append(f"Reply with ONLY the file block(s) for: {', '.join(step.files)}. "
                  f"Do NOT write or change {', '.join(step.tests)}: the tests are already final.")
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n\n".join(parts)}]
@@ -1735,6 +1913,7 @@ class Transcript:
     def __init__(self, root: str | Path):
         self.path = Path(root) / ".codeagent" / "transcript.md"
         self._thinking: list[str] = []
+        self._content: list[str] = []
 
     def _append(self, text: str) -> None:
         try:
@@ -1745,13 +1924,22 @@ class Transcript:
             pass
 
     def prompt(self, messages: list[dict], label: str) -> None:
-        self._thinking = []
+        self._thinking, self._content = [], []
         body = "".join(f"[{m['role']}]\n{str(m['content']).rstrip()}\n\n" for m in messages)
         self._append(f"\n==== PROMPT: {label} ({time.strftime('%Y-%m-%d %H:%M:%S')}) ====\n{body}")
 
     def chunk(self, kind: str, text: str) -> None:
-        if kind == "thinking":
-            self._thinking.append(text)
+        (self._thinking if kind == "thinking" else self._content).append(text)
+
+    def no_reply(self, reason: str, *, seconds: float) -> None:
+        """The call ended without a usable answer: keep whatever streamed in, and why it ended."""
+        out = ""
+        if self._thinking:
+            out += f"==== MODEL THINKING (partial) ====\n{''.join(self._thinking).rstrip()}\n\n"
+        if self._content:
+            out += f"==== MODEL ANSWER (partial) ====\n{''.join(self._content).rstrip()}\n\n"
+        self._thinking, self._content = [], []
+        self._append(out + f"==== NO USABLE ANSWER after {seconds:.0f}s: {reason} ====\n")
 
     def reply(self, text: str, *, seconds: float, truncated: bool, temperature: float) -> None:
         out = ""
@@ -1759,7 +1947,7 @@ class Transcript:
             out += f"==== MODEL THINKING ====\n{''.join(self._thinking).rstrip()}\n\n"
         out += (f"==== MODEL ANSWER (raw) ====\n# seconds: {seconds:.1f}\n# truncated: {'yes' if truncated else 'no'}\n"
                 f"# temperature: {temperature:g}\n{text.rstrip()}\n==== END ====\n")
-        self._thinking = []
+        self._thinking, self._content = [], []
         self._append(out)
 
 
@@ -1943,6 +2131,11 @@ class Runner:
         seen: dict[str, int] = {}                        # code we already tried -> attempt number
         fresh = False                                    # next prompt hides the previous code (anti-anchoring)
         repeats = 0                                      # how many times the model repeated itself
+        quiet = False                                    # after a loop / empty answer: retry without thinking
+        if step.signature:
+            output, satisfied = self._reset_skeleton(step, tests, output)
+            if satisfied:
+                return
         for n in range(1, self.cfg.max_attempts + 1):
             existing = {p: None for p in (*step.files, *step.context)} if fresh \
                 else self._read_many((*step.files, *step.context))
@@ -1951,8 +2144,12 @@ class Runner:
                                                self.cfg.max_context_chars, output, feedback),
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
-                             stop=BODY_STOP if step.signature else None, bump=0.15 * repeats)
+                             stop=BODY_STOP if step.signature else None, bump=0.15 * repeats,
+                             think=False if quiet else None)
             fresh = False
+            if getattr(text, "no_answer", ""):
+                quiet = True
+                repeats += 1
             if step.signature:                       # skeleton mode: the model wrote only the body
                 files, problems = self._collect(text, (module_path(step),), check_syntax=False)  # a body is not a module
                 if not problems:
@@ -1997,6 +2194,20 @@ class Runner:
         raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
 
     # ------------------------------------------------------------------ pieces
+    def _reset_skeleton(self, step: Step, tests: dict[str, str], output: str) -> tuple[str, bool]:
+        """Start every skeleton step from a clean `pass` body, so leftovers of a killed or failed run never
+        mislead the model and the test output it sees describes exactly the code it is asked to replace."""
+        inits = {f: self._read_many([f])[f] for f in step.files if f.endswith("__init__.py")}
+        files, problems = assemble_files(step, {module_path(step): "pass"}, inits)
+        if problems:
+            return output, False
+        self._write(files)
+        self._write(tests)
+        res = self._run_tests()
+        if res.timed_out or res.flooded:
+            return output, False
+        return res.output, res.ok
+
     def _retry_temperature(self, attempt: int, bump: float = 0.0) -> float:
         """Attempt 1 uses the configured temperature; retries warm up only a little, and never past
         the cap. A tiny model gets much worse when hot (it starts writing nonsense)."""
@@ -2040,7 +2251,8 @@ class Runner:
         return out
 
     def _ask(self, messages: list[dict], *, step: Step, phase: str, attempt: int,
-             num_predict: int | None = None, stop: list[str] | None = None, bump: float = 0.0) -> str:
+             num_predict: int | None = None, stop: list[str] | None = None, bump: float = 0.0,
+             think: bool | None = None) -> str:
         if self.should_stop():
             raise _Pause("stop requested")
         ok = self.guard.wait_until_ok(on_wait=lambda r: self.log("   waiting for resources: " + "; ".join(r)),
@@ -2051,21 +2263,40 @@ class Runner:
             raise _Pause("system resources stayed too low; will retry later")
         temperature = self._retry_temperature(attempt, bump)
         started = time.monotonic()
-        self.log(f"   asking the model ({phase}, attempt {attempt}, think={think_value(self.cfg)!r}); "
+        self.log(f"   asking the model ({phase}, attempt {attempt}, think={(False if think is False else think_value(self.cfg))!r}); "
                  "a reasoning model can be silent for minutes")
         try:
             self.attempts += 1
             extra = {"stop": stop} if stop else {}
-            label = f"{step.title} / {phase} / attempt {attempt}"
+            if think is False:
+                extra["think"] = False
+            label = f"{step.title} / {phase} / attempt {attempt}" + (" / no thinking" if think is False else "")
             self.transcript.prompt(messages, label)
             if self.live:
                 self.live.prompt(messages, label)
-                extra["on_token"] = lambda kind, piece: (self.live.chunk(kind, piece), self.transcript.chunk(kind, piece))
-            text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict, **extra)
+
+            def on_token(kind: str, piece: str) -> None:        # always streamed: a loop can be stopped, a partial kept
+                self.transcript.chunk(kind, piece)
+                if self.live:
+                    self.live.chunk(kind, piece)
+            text = self.llm.chat(messages, temperature=temperature, num_predict=num_predict,
+                                 on_token=on_token, **extra)
             if self.live and not self.live.streamed:        # a backend that does not stream: show the whole reply now
                 self.live.chunk("content", str(text))
+        except NoAnswer as e:                                # looped or ran out of tokens thinking: a failed attempt
+            seconds = time.monotonic() - started
+            self.transcript.no_reply(str(e), seconds=seconds)
+            self.log(f"   no usable answer after {seconds:.0f}s: {e}")
+            text = _reply("", True)
+            text.no_answer = _no_answer_feedback(e)
+            self.sleep(self.cfg.step_cooldown_s)
+            return text
         except LLMError as e:
+            self.transcript.no_reply(f"model error: {e}", seconds=time.monotonic() - started)
             raise _Pause(f"model unavailable: {e}") from e
+        except BaseException as e:                           # Ctrl+C and friends: still keep what streamed in
+            self.transcript.no_reply(f"interrupted ({type(e).__name__})", seconds=time.monotonic() - started)
+            raise
         finally:
             if self.live:
                 self.live.end()
@@ -2081,6 +2312,8 @@ class Runner:
 
     def _collect(self, text: str, allowed: tuple[str, ...], *,
                  check_syntax: bool = True) -> tuple[dict[str, str], list[str]]:
+        if getattr(text, "no_answer", ""):
+            return {}, [text.no_answer]
         parsed = parse_file_blocks(str(text), truncated=bool(getattr(text, "truncated", False)))
         for note in parsed.notes:
             self.log(f"   fixed up: {note}")
@@ -2134,7 +2367,7 @@ class Runner:
     def _run_tests(self) -> CommandResult:
         return self.run_cmd(self.plan.test_command, self.ws.root, allowed=self.cfg.allowed_commands,
                             timeout=self.cfg.test_timeout, mem_mb=self.cfg.command_mem_mb,
-                            max_output_chars=self.cfg.max_output_chars)
+                            max_output_chars=max(self.cfg.max_output_chars * 5, 15000))
 
 
 # ==========================================================================
@@ -2252,6 +2485,11 @@ def cmd_doctor(args, out, **_):
     ok("git found") if shutil.which("git") else fail("git is not installed (sudo apt install git)")
 
     out(f"       backend={cfg.backend} url={cfg.base_url} model={cfg.model} num_ctx={cfg.num_ctx}")
+    if cfg.think and cfg.think_level != "low" and not cfg.model.lower().startswith("gpt-oss"):
+        warn(f"CODEAGENT_THINK_LEVEL={cfg.think_level} does nothing for {cfg.model}: only gpt-oss models take a "
+             "level, every other model just thinks on/off. Use CODEAGENT_MAX_THINK_CHARS to bound the thinking.")
+    if cfg.think and cfg.temperature < 0.5:
+        warn("thinking models loop more often at low temperature; 0.6 is the usual setting for thinking mode.")
     try:
         models = list_models(cfg)
     except LLMError as e:

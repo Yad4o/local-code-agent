@@ -1,6 +1,6 @@
 from agent import Transcript
 from tests.test_cli import lines, plan, run_cli  # noqa: F401
-from tests.test_runner import CORE_OK, INIT, TEST_CORE, FakeLLM
+from tests.test_runner import CORE_OK, INIT, TEST_CORE, FakeLLM, cfg  # noqa: F401
 
 MSGS = [{"role": "system", "content": "be brief"}, {"role": "user", "content": "write add"}]
 
@@ -50,3 +50,41 @@ def test_run_saves_all_prompts_and_replies_without_live(plan, tmp_path, lines): 
     assert body.count("==== PROMPT:") == 2 and body.count("==== MODEL ANSWER (raw) ====") == 2
     assert "Create slugify(text)" in body and "def test_basic" in body
     assert "==== PROMPT" not in (ws / ".codeagent" / "agent.log").read_text()
+
+
+def test_a_call_with_no_usable_answer_still_leaves_its_partial_output_in_the_transcript(tmp_path):
+    t = Transcript(tmp_path)
+    t.prompt(MSGS, "x")
+    t.chunk("thinking", "wait wait wait")
+    t.chunk("content", "FILE: a.py\n```py")
+    t.no_reply("the model started repeating itself", seconds=12)
+    body = t.path.read_text()
+    assert body.index("MODEL THINKING (partial)") < body.index("wait wait wait") < body.index("MODEL ANSWER (partial)")
+    assert "NO USABLE ANSWER after 12s: the model started repeating itself" in body
+
+
+def test_run_records_a_failed_call_and_an_interrupted_call(tmp_path, cfg):  # noqa: F811
+    from agent import LLMError, NoAnswer
+    from tests.test_runner import BODY_OK, make_body_runner
+
+    class Looper:
+        def __init__(self, *outcomes):
+            self.outcomes, self.calls = list(outcomes), []
+
+        def chat(self, messages, **kw):
+            self.calls.append(kw)
+            kw["on_token"]("thinking", "hmm hmm")
+            o = self.outcomes.pop(0)
+            if isinstance(o, BaseException):
+                raise o
+            return o
+
+    r, ws = make_body_runner(tmp_path, Looper(NoAnswer("stuck repeating itself"), BODY_OK), cfg)
+    assert r.run().outcome == "done"
+    body = (ws.root / ".codeagent" / "transcript.md").read_text()
+    assert "hmm hmm" in body and "NO USABLE ANSWER" in body and "stuck repeating itself" in body
+    assert "attempt 2 / no thinking" in body
+
+    r2, ws2 = make_body_runner(tmp_path / "b", Looper(LLMError("server down")), cfg)
+    assert r2.run().outcome == "paused"
+    assert "model error: server down" in (ws2.root / ".codeagent" / "transcript.md").read_text()
