@@ -1177,6 +1177,13 @@ def step_context(step: Step) -> tuple[str, ...]:
     return tuple(out)
 
 
+def missing_named_files(step: Step, existing: dict[str, str | None]) -> list[str]:
+    """Files the description names ("use check_args from cart/checks.py") that are not in the workspace.
+    The model cannot call what it cannot see, so six attempts at the step would only burn time."""
+    own = {*step.files, *step.tests}
+    return [p for p in step_context(step) if p not in own and not (existing.get(p) or "").strip()]
+
+
 def _top_level_names(source: str) -> list[str]:
     try:
         tree = ast.parse(source)
@@ -2207,6 +2214,10 @@ class Runner:
         repeats = 0                                      # how many times the model repeated itself
         quiet = bool(step.signature) and self.cfg.think and not self.cfg.think_body   # a body is written without thinking
         if step.signature:
+            gone = missing_named_files(step, self._read_many(step_context(step)))
+            if gone:
+                raise _Fail(f"the step description names {', '.join(gone)}, but it is missing or empty in the "
+                            f"workspace; an earlier step must create it first (check that it passed and was committed)")
             output, satisfied = self._reset_skeleton(step, tests, output)
             if satisfied:
                 return
