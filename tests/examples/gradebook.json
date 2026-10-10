@@ -4,7 +4,7 @@
   "steps": [
     {
       "title": "average returns the mean of a list of scores",
-      "description": "Create average(scores) in gradebook/average.py. scores is a list of numbers.\n1. If scores is empty, raise ValueError.\n2. total = 0\n3. For each s in scores: total = total + s\n4. return total / len(scores)\n",
+      "description": "Create average(scores) in gradebook/average.py. scores is a list of numbers.\n1. If scores is empty, raise ValueError.\n2. total = 0\n3. For each s in scores:\n   - total = total + s\n4. return total / len(scores)\n",
       "commit": "feat: add average",
       "tests": [
         "tests/test_average.py"
@@ -108,7 +108,7 @@
     },
     {
       "title": "best_student finds the name with the highest average",
-      "description": "Create best_student(grades) in gradebook/best.py. Use average from gradebook/average.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores. If two students tie, the first one wins.\n1. If grades is empty, raise ValueError.\n2. best_name = None and best_avg = None\n3. For each name in grades:\n   - avg = average(grades[name])\n   - if best_avg is None or avg > best_avg: best_name = name and best_avg = avg\n4. return best_name\n",
+      "description": "Create best_student(grades) in gradebook/best.py. Use average from gradebook/average.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores. If two students tie, the first one wins.\n1. If grades is empty, raise ValueError.\n2. best_name = None and best_avg = None\n3. For each name in grades:\n   - avg = average(grades[name])\n   - if best_avg is None or avg > best_avg:\n     - best_name = name\n     - best_avg = avg\n4. return best_name\n",
       "commit": "feat: add best_student",
       "tests": [
         "tests/test_best.py"
@@ -161,7 +161,7 @@
     },
     {
       "title": "report_card maps every student to a letter grade",
-      "description": "Create report_card(grades) in gradebook/report.py. Use average from gradebook/average.py and letter_grade from gradebook/letter.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores.\n1. result = {}\n2. For each name in grades: result[name] = letter_grade(average(grades[name]))\n3. return result\n",
+      "description": "Create report_card(grades) in gradebook/report.py. Use average from gradebook/average.py and letter_grade from gradebook/letter.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores.\n1. result = {}\n2. For each name in grades:\n   - result[name] = letter_grade(average(grades[name]))\n3. return result\n",
       "commit": "feat: add report_card",
       "tests": [
         "tests/test_report.py"

@@ -38,7 +38,7 @@
     },
     {
       "title": "is_palindrome ignores case and punctuation",
-      "description": "Create is_palindrome(text) in texttools/palin.py.\n1. cleaned = \"\"\n2. For each ch in text.lower(): if ch.isalnum(): cleaned = cleaned + ch\n3. return cleaned == cleaned[::-1]\n",
+      "description": "Create is_palindrome(text) in texttools/palin.py.\n1. cleaned = \"\"\n2. For each ch in text.lower():\n   - if ch.isalnum(): cleaned = cleaned + ch\n3. return cleaned == cleaned[::-1]\n",
       "commit": "feat: add is_palindrome",
       "tests": [
         "tests/test_palin.py"
@@ -121,8 +121,48 @@
       ]
     },
     {
+      "title": "word_counts counts how often each word appears",
+      "description": "Create word_counts(text) in texttools/counts.py. Words are lowercase and split on spaces. Return a dict that maps each word to how many times it appears, with the words in the order they first appear.\n1. counts = {}\n2. For each word in text.lower().split():\n   - counts[word] = counts.get(word, 0) + 1\n3. return counts\n",
+      "commit": "feat: add word_counts",
+      "tests": [
+        "tests/test_counts.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/counts.py"
+      ],
+      "function": "texttools.counts:word_counts",
+      "signature": "word_counts(text)",
+      "examples": [
+        {
+          "args": [
+            "a b a"
+          ],
+          "expect": {
+            "a": 2,
+            "b": 1
+          }
+        },
+        {
+          "args": [
+            "Hi hi there"
+          ],
+          "expect": {
+            "hi": 2,
+            "there": 1
+          }
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expect": {}
+        }
+      ]
+    },
+    {
       "title": "most_common_word finds the word used most",
-      "description": "Create most_common_word(text) in texttools/common.py. Words are lowercase and split on spaces. If two words are used equally often, the one that appears first wins.\n1. If text.split() is empty, raise ValueError.\n2. counts = {} and order = []\n3. For each word in text.lower().split():\n   - if word not in counts: counts[word] = 0 and order.append(word)\n   - counts[word] = counts[word] + 1\n4. best = order[0]\n5. For each word in order: if counts[word] > counts[best]: best = word\n6. return best\n",
+      "description": "Create most_common_word(text) in texttools/common.py. Use word_counts from texttools/counts.py (already written, shown below). If two words are used equally often, the one that appears first wins.\n1. If text.split() is empty, raise ValueError.\n2. counts = word_counts(text)\n3. best = None\n4. For each word in counts:\n   - if best is None or counts[word] > counts[best]:\n     - best = word\n5. return best\n",
       "commit": "feat: add most_common_word",
       "tests": [
         "tests/test_common.py"
@@ -130,6 +170,9 @@
       "files": [
         "texttools/__init__.py",
         "texttools/common.py"
+      ],
+      "context": [
+        "texttools/counts.py"
       ],
       "function": "texttools.common:most_common_word",
       "signature": "most_common_word(text)",

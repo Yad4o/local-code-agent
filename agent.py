@@ -104,6 +104,18 @@ def _longest_valid_python_prefix(lines: list[str]) -> list[str] | None:
     return None
 
 
+def _is_bare_code(text: str) -> bool:
+    """True when a reply with no fence is plain Python (so it can be used as the only file), not prose."""
+    body = textwrap.dedent(text).strip("\n")
+    if not body.strip():
+        return False
+    try:
+        ast.parse(body)
+    except SyntaxError:
+        return False
+    return True
+
+
 def parse_file_blocks(text: str, *, truncated: bool = False) -> ParseResult:
     """`truncated=True` means the model hit its token limit, so an unclosed block was CUT OFF
     (repair it if it is Python). Otherwise an unclosed block just means it forgot the fence."""
@@ -484,7 +496,7 @@ class Config:
     temperature: float = 0.2
     think_body: bool = False                    # False: a function body is written without thinking (a 0.8B model
                                                 # that thinks about a 5-line body wanders for minutes and answers worse)
-    think_body_after: int = 4                   # a body that failed this many attempts WITHOUT thinking is tried with thinking
+    think_body_after: int = 0                   # a body that failed this many attempts WITHOUT thinking is tried with thinking
                                                 # (still bounded by max_think_chars); 0 = never
     temperature_no_think: float = 0.3           # temperature for calls that run without thinking
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
@@ -2418,6 +2430,9 @@ class Runner:
         if not parsed.blocks and len(parsed.anonymous) == 1 and len(targets) == 1:
             parsed.blocks = [FileBlock(targets[0], parsed.anonymous[0])]     # only one file is possible: no header needed
             self.log(f"   fixed up: the reply had no FILE header; used its only code block as {targets[0]}")
+        if not parsed.blocks and not problems and len(targets) == 1 and "```" not in str(text) and _is_bare_code(str(text)):
+            parsed.blocks = [FileBlock(targets[0], str(text).strip("\n"))]         # bare code, no fence at all: still unambiguous
+            self.log(f"   fixed up: the reply was bare code without a fence; used it as {targets[0]}")
         if not parsed.blocks and not problems:
             return {}, ["your reply contained no FILE blocks; reply only with: FILE: <path> then a fenced code block"]
         got: dict[str, str] = {}

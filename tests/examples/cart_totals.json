@@ -50,7 +50,7 @@
     },
     {
       "title": "cart_total adds up every line",
-      "description": "Create cart_total(cart) in totals/cart.py. Use line_total from totals/line.py (already written, shown below).\ncart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\n1. total = 0\n2. For each item in cart: total = total + line_total(item)\n3. return total\n",
+      "description": "Create cart_total(cart) in totals/cart.py. Use line_total from totals/line.py (already written, shown below).\ncart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\n1. total = 0\n2. For each item in cart:\n   - total = total + line_total(item)\n3. return total\n",
       "commit": "feat: add cart_total",
       "tests": [
         "tests/test_cart.py"
@@ -104,7 +104,7 @@
     },
     {
       "title": "remove_item drops one item by name",
-      "description": "Create remove_item(cart, name) in totals/remove.py. cart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart: if item[\"name\"] != name: result.append(item)\n3. return result\n",
+      "description": "Create remove_item(cart, name) in totals/remove.py. cart is a list of item dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] != name: result.append(item)\n3. return result\n",
       "commit": "feat: add remove_item",
       "tests": [
         "tests/test_remove.py"

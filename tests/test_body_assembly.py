@@ -100,6 +100,20 @@ def test_think_body_true_keeps_thinking_for_the_first_attempt(tmp_path, cfg):  #
     assert "think" not in llm.kwargs[0] and llm.kwargs[1]["think"] is False
 
 
+def test_a_reply_that_is_bare_code_without_a_fence_is_used_instead_of_wasting_an_attempt(tmp_path, cfg):  # noqa: F811
+    bare = "import re\ndef slugify(text):\n    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')\n"
+    llm = FakeLLM(bare)
+    report = make_body_runner(tmp_path, llm, cfg)[0].run()
+    assert report.results[0].status == "done" and len(llm.kwargs) == 1
+
+
+def test_prose_without_a_fence_is_still_rejected(tmp_path, cfg):  # noqa: F811
+    from tests.test_runner import BODY_OK
+    llm = FakeLLM("Sure! Here is how I would do it, first lowercase the text.", BODY_OK)
+    report = make_body_runner(tmp_path, llm, cfg)[0].run()
+    assert report.results[0].status == "done" and len(llm.kwargs) == 2
+
+
 def test_a_body_that_keeps_failing_is_retried_with_thinking_from_attempt_think_body_after(tmp_path, cfg):  # noqa: F811
     from tests.test_runner import BODY_BAD, BODY_OK
     cfg.think_body_after = 3
