@@ -418,7 +418,12 @@ codeagent run plan-2-rules.json --workspace ~/agent-projects/<project> --live
 
 `codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly
 (joined statements, a loop and its body on one line, English conditions, recipes that are too long): fix every warning
-before running. Finished steps are skipped on a rerun. A step whose description or examples were edited runs again.
+before running. Finished steps are skipped on a rerun.
+
+When every plan is done, the user can merge the one-module-per-function files into a few themed modules:
+`codeagent consolidate --suggest plan-1.json plan-2.json > groups.json` (one module per plan), edit it if they like,
+then `codeagent consolidate groups.json --workspace ~/agent-projects/<project>`. Plans must only import from
+**earlier** plans (as in section 9), or the merged modules would import each other in a circle and it refuses. A step whose description or examples were edited runs again.
 
 ---
 

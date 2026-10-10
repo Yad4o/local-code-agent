@@ -1,0 +1,11 @@
+{
+  "package": "expense_manager",
+  "modules": {
+    "validation": ["amounts", "categories", "descriptions", "dates", "kinds", "transaction_validation", "transaction_text"],
+    "records":    ["make", "ids", "add", "find", "replace", "remove", "change_category", "change_amount", "change_description"],
+    "filters":    ["filter_kind", "filter_category", "filter_month", "filter_dates", "search", "sort_key", "sorting"],
+    "reports":    ["sum_amount", "count", "category_totals", "monthly_summary", "balance", "top_category", "largest"],
+    "budgets":    ["budget_remaining", "budget_status", "budget_set", "budget_get"],
+    "formatting": ["parse_amount", "format_money", "format_transaction", "format_month_summary"]
+  }
+}

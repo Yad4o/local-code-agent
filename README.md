@@ -258,6 +258,32 @@ longer than 6 lines or with two loops); fix them before running.
 `tests/examples/todo_core.json` builds a todo list's pure core (7 functions); `examples/todo/` holds the hand-written
 glue (JSON file storage and a command line) with its own tests. Steps and commands: `examples/todo/README.md`.
 
+### Helper functions are shown as signatures
+
+A step that calls an earlier function sees only its signature (`def validate_date(date_text): ...`), not its code:
+shown the whole body, a small model sometimes pastes it into the new function instead of calling it (two steps of
+the Expense Manager run did exactly that). `CODEAGENT_CONTEXT_VIEW=full` brings the old behaviour back.
+
+### After a project is built: `codeagent consolidate`
+
+A finished plan leaves one tiny module and one test file per function (38 + 38 for the Expense Manager).
+`consolidate` merges them into a few themed modules, with no model involved:
+
+```bash
+codeagent consolidate --suggest plan1.json plan2.json plan3.json > groups.json   # starter: one module per plan
+# edit groups.json: new module name -> the old modules that go into it (see examples/expense_groups.json)
+codeagent consolidate groups.json --workspace ~/agent-projects/expense --dry-run  # look first
+codeagent consolidate groups.json --workspace ~/agent-projects/expense
+```
+
+It rewrites the imports (including `from pkg import module as alias` style), keeps the `__init__.py` exports, merges
+the test files (a test name that repeats gets the old module name in it), and tidies unused `x = f(...)`
+assignments (`--no-tidy` to keep them). It then runs the whole test suite: it must pass with the **same number of
+tests** as before, otherwise every file is put back and nothing is changed. The result is one commit
+(`git reset --hard HEAD~1` undoes it). It refuses to start if the tests already fail, if the git tree is dirty, or
+if the groups would import each other in a circle. A consolidated workspace refuses `codeagent run`, because the
+plans' files no longer exist there: use a new workspace to rebuild.
+
 ### Building something big
 
 Split it into **pure functions** (data in, data out) and build those with plans; write the glue that touches the
