@@ -138,6 +138,8 @@ def _recipe_requirements(description: str) -> list[tuple[str, str]]:
 
 
 def _statement_keys(node: ast.stmt) -> list[str]:
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return []                                        # imports are hoisted to the top of the module, not in the body
     if isinstance(node, ast.If):
         keys = ["test:" + ast.dump(node.test)]
         for child in node.body:

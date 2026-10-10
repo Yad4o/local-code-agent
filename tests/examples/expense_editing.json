@@ -1,0 +1,812 @@
+{
+  "title": "Expense Manager Editing and Display",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "change_transaction_category edits one category",
+      "description": "Create change_transaction_category(transactions, transaction_id, category) in expense_manager/change_category.py. Each transaction uses the standard record shape {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use find_transaction from expense_manager/find.py, normalize_category from expense_manager/categories.py, and replace_transaction from expense_manager/replace.py (already written, shown below). Return a NEW list.\n1. existing = find_transaction(transactions, transaction_id)\n2. new_category = normalize_category(category)\n3. updated = dict(existing)\n4. updated[\"category\"] = new_category\n5. return replace_transaction(transactions, transaction_id, updated)\n",
+      "commit": "feat: edit transaction category",
+      "tests": [
+        "tests/test_change_category.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/change_category.py"
+      ],
+      "context": [
+        "expense_manager/find.py",
+        "expense_manager/categories.py",
+        "expense_manager/replace.py"
+      ],
+      "function": "expense_manager.change_category:change_transaction_category",
+      "signature": "change_transaction_category(transactions, transaction_id, category)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            " Travel "
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "travel",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            "  "
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            1,
+            "travel"
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "change_transaction_amount edits one amount",
+      "description": "Create change_transaction_amount(transactions, transaction_id, amount_paise) in expense_manager/change_amount.py. Each transaction uses the standard record shape. Use find_transaction from expense_manager/find.py, validate_amount from expense_manager/amounts.py, and replace_transaction from expense_manager/replace.py (already written, shown below). Return a NEW list.\n1. existing = find_transaction(transactions, transaction_id)\n2. amount_ok = validate_amount(amount_paise)\n3. updated = dict(existing)\n4. updated[\"amount_paise\"] = amount_paise\n5. return replace_transaction(transactions, transaction_id, updated)\n",
+      "commit": "feat: edit transaction amount",
+      "tests": [
+        "tests/test_change_amount.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/change_amount.py"
+      ],
+      "context": [
+        "expense_manager/find.py",
+        "expense_manager/amounts.py",
+        "expense_manager/replace.py"
+      ],
+      "function": "expense_manager.change_amount:change_transaction_amount",
+      "signature": "change_transaction_amount(transactions, transaction_id, amount_paise)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            2500
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 2500,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            0
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            1,
+            2500
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "change_transaction_description edits one description",
+      "description": "Create change_transaction_description(transactions, transaction_id, description) in expense_manager/change_description.py. Each transaction uses the standard record shape. Use find_transaction from expense_manager/find.py, normalize_description from expense_manager/descriptions.py, and replace_transaction from expense_manager/replace.py (already written, shown below). Return a NEW list.\n1. existing = find_transaction(transactions, transaction_id)\n2. new_description = normalize_description(description)\n3. updated = dict(existing)\n4. updated[\"description\"] = new_description\n5. return replace_transaction(transactions, transaction_id, updated)\n",
+      "commit": "feat: edit transaction description",
+      "tests": [
+        "tests/test_change_description.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/change_description.py"
+      ],
+      "context": [
+        "expense_manager/find.py",
+        "expense_manager/descriptions.py",
+        "expense_manager/replace.py"
+      ],
+      "function": "expense_manager.change_description:change_transaction_description",
+      "signature": "change_transaction_description(transactions, transaction_id, description)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            "Coffee"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "Coffee",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            "  "
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            1,
+            "Coffee"
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "filter_by_description searches case-insensitively",
+      "description": "Create filter_by_description(transactions, query) in expense_manager/search.py. Transactions use the standard record shape. Search the description field without regard to letter case. Return a NEW list of copied records.\n1. normalized_query = query.strip().lower()\n2. if normalized_query == \"\": raise ValueError\n3. return [dict(item) for item in transactions if normalized_query in item[\"description\"].lower()]\n",
+      "commit": "feat: search transaction descriptions",
+      "tests": [
+        "tests/test_search.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/search.py"
+      ],
+      "context": [],
+      "function": "expense_manager.search:filter_by_description",
+      "signature": "filter_by_description(transactions, query)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "Tea with milk",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "Bus ticket",
+                "date": "2026-10-11",
+                "kind": "expense"
+              }
+            ],
+            "TEA"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "Tea with milk",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "tea"
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [],
+            "  "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "transaction_sort_key builds deterministic sorting keys",
+      "description": "Create transaction_sort_key(transaction, order_by) in expense_manager/sort_key.py. transaction has the standard record shape. Support order_by values \"date\", \"amount\", and \"category\". Return a two-element list so ties are broken by the transaction ID.\n1. if order_by == \"date\": return [transaction[\"date\"], transaction[\"id\"]]\n2. if order_by == \"amount\": return [transaction[\"amount_paise\"], transaction[\"id\"]]\n3. if order_by == \"category\": return [transaction[\"category\"], transaction[\"id\"]]\n4. raise ValueError\n",
+      "commit": "feat: add transaction sort keys",
+      "tests": [
+        "tests/test_sort_key.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/sort_key.py"
+      ],
+      "context": [],
+      "function": "expense_manager.sort_key:transaction_sort_key",
+      "signature": "transaction_sort_key(transaction, order_by)",
+      "examples": [
+        {
+          "args": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            },
+            "date"
+          ],
+          "expect": [
+            "2026-10-10",
+            1
+          ]
+        },
+        {
+          "args": [
+            {
+              "id": 2,
+              "amount_paise": 5000,
+              "category": "travel",
+              "description": "bus",
+              "date": "2026-10-11",
+              "kind": "expense"
+            },
+            "amount"
+          ],
+          "expect": [
+            5000,
+            2
+          ]
+        },
+        {
+          "args": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            },
+            "category"
+          ],
+          "expect": [
+            "food",
+            1
+          ]
+        },
+        {
+          "args": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            },
+            "unknown"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "sort_transactions sorts records by a chosen field",
+      "description": "Create sort_transactions(transactions, order_by) in expense_manager/sorting.py. Transactions use the standard record shape. Use transaction_sort_key from expense_manager/sort_key.py (already written, shown below). Valid order_by values are \"date\", \"amount\", and \"category\". Return a NEW list of copied records in ascending order.\n1. if order_by not in [\"date\", \"amount\", \"category\"]: raise ValueError\n2. sorted_items = sorted(transactions, key=lambda item: transaction_sort_key(item, order_by))\n3. return [dict(item) for item in sorted_items]\n",
+      "commit": "feat: sort transaction records",
+      "tests": [
+        "tests/test_sorting.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/sorting.py"
+      ],
+      "context": [
+        "expense_manager/sort_key.py"
+      ],
+      "function": "expense_manager.sorting:sort_transactions",
+      "signature": "sort_transactions(transactions, order_by)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 2,
+                "amount_paise": 5000,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-11",
+                "kind": "expense"
+              },
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            "date"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            },
+            {
+              "id": 2,
+              "amount_paise": 5000,
+              "category": "travel",
+              "description": "bus",
+              "date": "2026-10-11",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 5000,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 1250,
+                "category": "travel",
+                "description": "bus",
+                "date": "2026-10-11",
+                "kind": "expense"
+              }
+            ],
+            "amount"
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "amount_paise": 1250,
+              "category": "travel",
+              "description": "bus",
+              "date": "2026-10-11",
+              "kind": "expense"
+            },
+            {
+              "id": 1,
+              "amount_paise": 5000,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "unknown"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "parse_amount_rupees converts text to paise",
+      "description": "Create parse_amount_rupees(amount_text) in expense_manager/parse_amount.py. Accept positive rupee amounts with no decimal point or one or two digits after the decimal point. Reject zero, negative values, and more than two decimal places.\n1. import re, decimal\n2. if re.fullmatch(r\"\\d+(?:\\.\\d{1,2})?\", amount_text) is None: raise ValueError\n3. amount_paise = int(decimal.Decimal(amount_text) * 100)\n4. if amount_paise <= 0: raise ValueError\n5. return amount_paise\n",
+      "commit": "feat: parse rupee amounts",
+      "tests": [
+        "tests/test_parse_amount.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/parse_amount.py"
+      ],
+      "context": [],
+      "function": "expense_manager.parse_amount:parse_amount_rupees",
+      "signature": "parse_amount_rupees(amount_text)",
+      "examples": [
+        {
+          "args": [
+            "12"
+          ],
+          "expect": 1200
+        },
+        {
+          "args": [
+            "12.5"
+          ],
+          "expect": 1250
+        },
+        {
+          "args": [
+            "12.05"
+          ],
+          "expect": 1205
+        },
+        {
+          "args": [
+            "0"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            "-3"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            "12.345"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "format_money displays paise as rupees",
+      "description": "Create format_money(amount_paise) in expense_manager/format_money.py. amount_paise is an integer and may be negative for a net balance. Display two digits after the decimal point and use a leading minus sign before the rupee symbol for negative values.\n1. sign = \"-\" if amount_paise < 0 else \"\"\n2. absolute_amount = abs(amount_paise)\n3. rupees, paise = divmod(absolute_amount, 100)\n4. return f\"{sign}₹{rupees}.{paise:02d}\"\n",
+      "commit": "feat: format rupee amounts",
+      "tests": [
+        "tests/test_format_money.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/format_money.py"
+      ],
+      "context": [],
+      "function": "expense_manager.format_money:format_money",
+      "signature": "format_money(amount_paise)",
+      "examples": [
+        {
+          "args": [
+            0
+          ],
+          "expect": "₹0.00"
+        },
+        {
+          "args": [
+            1250
+          ],
+          "expect": "₹12.50"
+        },
+        {
+          "args": [
+            1205
+          ],
+          "expect": "₹12.05"
+        },
+        {
+          "args": [
+            -250
+          ],
+          "expect": "-₹2.50"
+        }
+      ]
+    },
+    {
+      "title": "format_transaction produces one readable record line",
+      "description": "Create format_transaction(transaction) in expense_manager/format_transaction.py. transaction has the standard record shape. Use format_money from expense_manager/format_money.py (already written, shown below). Produce exactly: DATE | KIND | CATEGORY | DESCRIPTION | AMOUNT, replacing each label with the corresponding transaction value and the formatted rupee amount.\n1. amount_text = format_money(transaction[\"amount_paise\"])\n2. return f\"{transaction['date']} | {transaction['kind']} | {transaction['category']} | {transaction['description']} | {amount_text}\"\n",
+      "commit": "feat: format transaction display lines",
+      "tests": [
+        "tests/test_format_transaction.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/format_transaction.py"
+      ],
+      "context": [
+        "expense_manager/format_money.py"
+      ],
+      "function": "expense_manager.format_transaction:format_transaction",
+      "signature": "format_transaction(transaction)",
+      "examples": [
+        {
+          "args": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "Tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "expect": "2026-10-10 | expense | food | Tea | ₹12.50"
+        },
+        {
+          "args": [
+            {
+              "id": 2,
+              "amount_paise": 50000,
+              "category": "salary",
+              "description": "Salary",
+              "date": "2026-10-01",
+              "kind": "income"
+            }
+          ],
+          "expect": "2026-10-01 | income | salary | Salary | ₹500.00"
+        }
+      ]
+    },
+    {
+      "title": "format_month_summary displays monthly financial totals",
+      "description": "Create format_month_summary(summary) in expense_manager/format_month_summary.py. summary has keys month, income_paise, expense_paise, and balance_paise. Use format_money from expense_manager/format_money.py (already written, shown below). Return one line formatted exactly as MONTH | income AMOUNT | expenses AMOUNT | balance AMOUNT.\n1. income_text = format_money(summary[\"income_paise\"])\n2. expense_text = format_money(summary[\"expense_paise\"])\n3. balance_text = format_money(summary[\"balance_paise\"])\n4. return f\"{summary['month']} | income {income_text} | expenses {expense_text} | balance {balance_text}\"\n",
+      "commit": "feat: format monthly summary",
+      "tests": [
+        "tests/test_format_month_summary.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/format_month_summary.py"
+      ],
+      "context": [
+        "expense_manager/format_money.py"
+      ],
+      "function": "expense_manager.format_month_summary:format_month_summary",
+      "signature": "format_month_summary(summary)",
+      "examples": [
+        {
+          "args": [
+            {
+              "month": "2026-10",
+              "income_paise": 10000,
+              "expense_paise": 3550,
+              "balance_paise": 6450
+            }
+          ],
+          "expect": "2026-10 | income ₹100.00 | expenses ₹35.50 | balance ₹64.50"
+        },
+        {
+          "args": [
+            {
+              "month": "2026-10",
+              "income_paise": 0,
+              "expense_paise": 0,
+              "balance_paise": 0
+            }
+          ],
+          "expect": "2026-10 | income ₹0.00 | expenses ₹0.00 | balance ₹0.00"
+        },
+        {
+          "args": [
+            {
+              "month": "2026-10",
+              "income_paise": 1000,
+              "expense_paise": 1500,
+              "balance_paise": -500
+            }
+          ],
+          "expect": "2026-10 | income ₹10.00 | expenses ₹15.00 | balance -₹5.00"
+        }
+      ]
+    },
+    {
+      "title": "set_month_budget creates or replaces a monthly budget",
+      "description": "Create set_month_budget(budgets, month, amount_paise) in expense_manager/budget_set.py. budgets is a list of dicts shaped like {\"month\": \"2026-10\", \"amount_paise\": 50000}. amount_paise must be a non-negative integer. Return a NEW list, replacing any existing budget for that month and preserving other months.\n1. import re\n2. if re.fullmatch(r\"\\d{4}-(0[1-9]|1[0-2])\", month) is None: raise ValueError\n3. if not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise < 0: raise ValueError\n4. result = [dict(budget) for budget in budgets if budget[\"month\"] != month]\n5. result.append({\"month\": month, \"amount_paise\": amount_paise})\n6. return result\n",
+      "commit": "feat: set monthly budgets",
+      "tests": [
+        "tests/test_budget_set.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/budget_set.py"
+      ],
+      "context": [],
+      "function": "expense_manager.budget_set:set_month_budget",
+      "signature": "set_month_budget(budgets, month, amount_paise)",
+      "examples": [
+        {
+          "args": [
+            [],
+            "2026-10",
+            50000
+          ],
+          "expect": [
+            {
+              "month": "2026-10",
+              "amount_paise": 50000
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "month": "2026-09",
+                "amount_paise": 30000
+              }
+            ],
+            "2026-10",
+            50000
+          ],
+          "expect": [
+            {
+              "month": "2026-09",
+              "amount_paise": 30000
+            },
+            {
+              "month": "2026-10",
+              "amount_paise": 50000
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "month": "2026-10",
+                "amount_paise": 30000
+              }
+            ],
+            "2026-10",
+            50000
+          ],
+          "expect": [
+            {
+              "month": "2026-10",
+              "amount_paise": 50000
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "2026-13",
+            50000
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            "2026-10",
+            -1
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "get_month_budget retrieves the budget for one month",
+      "description": "Create get_month_budget(budgets, month) in expense_manager/budget_get.py. budgets is a list of dicts shaped like {\"month\": \"2026-10\", \"amount_paise\": 50000}. Raise KeyError when the requested month has no budget.\n1. import re\n2. if re.fullmatch(r\"\\d{4}-(0[1-9]|1[0-2])\", month) is None: raise ValueError\n3. For each budget in budgets:\n   - if budget[\"month\"] == month: return budget[\"amount_paise\"]\n4. raise KeyError\n",
+      "commit": "feat: retrieve monthly budgets",
+      "tests": [
+        "tests/test_budget_get.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/budget_get.py"
+      ],
+      "context": [],
+      "function": "expense_manager.budget_get:get_month_budget",
+      "signature": "get_month_budget(budgets, month)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "month": "2026-10",
+                "amount_paise": 50000
+              }
+            ],
+            "2026-10"
+          ],
+          "expect": 50000
+        },
+        {
+          "args": [
+            [
+              {
+                "month": "2026-09",
+                "amount_paise": 30000
+              },
+              {
+                "month": "2026-10",
+                "amount_paise": 50000
+              }
+            ],
+            "2026-09"
+          ],
+          "expect": 30000
+        },
+        {
+          "args": [
+            [],
+            "2026-10"
+          ],
+          "raises": "KeyError"
+        },
+        {
+          "args": [
+            [],
+            "2026-13"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    }
+  ]
+}

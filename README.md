@@ -245,7 +245,8 @@ The full rules are in [`docs/PLAN_GUIDE_FOR_AI.md`](docs/PLAN_GUIDE_FOR_AI.md): 
 AI assistant, then tell it what you want built, and it writes the plan JSON for you.
 
 More example plans: `tests/examples/cart_totals.json` (steps that call earlier steps), `text_tools.json`
-(strings, loops, a hard step split in two), `gradebook.json` (branch chains, dict input, errors). Run any of them with
+(strings, loops, a hard step split in two), `gradebook.json` (branch chains, dict input, errors). `expense_core.json`, `expense_reports.json` and `expense_editing.json` are one project in
+38 steps: run them in this order in the same workspace (`tests/test_expense_example.py` does exactly that). Run any of them with
 `codeagent run tests/examples/<name>.json --workspace ~/agent-projects/<name> --live`.
 After a failed attempt the model is told which code lines of the recipe its body is missing (compared as Python,
 not as text), which is why recipe lines should be exact Python. `codeagent check plan.json` also prints `warning:` lines for description lines a small model copies wrongly (two
