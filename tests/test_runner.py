@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 import os
 import subprocess
@@ -305,6 +306,20 @@ def test_resume_skips_steps_that_are_already_done(tmp_path, cfg):
     report = r2.run()
     assert [s.status for s in report.results] == ["skipped", "done"]
     assert len(llm2.calls) == 2
+
+
+def test_a_done_step_whose_files_were_deleted_runs_again(tmp_path, cfg):
+    cfg.stop_on_failure = True
+    llm1 = FakeLLM(TEST_CORE, INIT + CORE_OK, "x", "y", "z")
+    r1, ws = make_runner(tmp_path, llm1, cfg, two=True)
+    assert [s.status for s in r1.run().results] == ["done", "failed"]
+    for f in r1.plan.steps[0].files:                                 # the user cleaned the workspace; state.json stayed
+        if not f.endswith("__init__.py"):
+            (Path(ws.root) / f).unlink()
+
+    llm2 = FakeLLM(TEST_CORE, INIT + CORE_OK, TEST_EXTRA, EXTRA_OK)
+    r2, _ = make_runner(tmp_path, llm2, cfg, two=True)
+    assert [s.status for s in r2.run().results] == ["done", "done"]
 
 
 def test_cooldown_sleep_happens_after_each_model_call(tmp_path, cfg):
