@@ -1,0 +1,796 @@
+{
+  "title": "Expense Manager Core",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "validate_amount checks positive paise",
+      "description": "Create validate_amount(amount_paise) in expense_manager/amounts.py.\n1. if not isinstance(amount_paise, int) or isinstance(amount_paise, bool) or amount_paise <= 0: raise ValueError\n2. return True\n",
+      "commit": "feat: add amount validation",
+      "tests": [
+        "tests/test_amounts.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/amounts.py"
+      ],
+      "context": [],
+      "function": "expense_manager.amounts:validate_amount",
+      "signature": "validate_amount(amount_paise)",
+      "examples": [
+        {
+          "args": [
+            1250
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            1
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            0
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            -100
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "normalize_category trims and lowercases a category",
+      "description": "Create normalize_category(category) in expense_manager/categories.py. category is a string.\n1. cleaned = category.strip().lower()\n2. if cleaned == \"\": raise ValueError\n3. return cleaned\n",
+      "commit": "feat: add category normalization",
+      "tests": [
+        "tests/test_categories.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/categories.py"
+      ],
+      "context": [],
+      "function": "expense_manager.categories:normalize_category",
+      "signature": "normalize_category(category)",
+      "examples": [
+        {
+          "args": [
+            " Food "
+          ],
+          "expect": "food"
+        },
+        {
+          "args": [
+            "TRAVEL"
+          ],
+          "expect": "travel"
+        },
+        {
+          "args": [
+            "food"
+          ],
+          "expect": "food"
+        },
+        {
+          "args": [
+            "  "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "normalize_description trims transaction descriptions",
+      "description": "Create normalize_description(description) in expense_manager/descriptions.py. description is a string.\n1. cleaned = description.strip()\n2. if cleaned == \"\": raise ValueError\n3. return cleaned\n",
+      "commit": "feat: add description normalization",
+      "tests": [
+        "tests/test_descriptions.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/descriptions.py"
+      ],
+      "context": [],
+      "function": "expense_manager.descriptions:normalize_description",
+      "signature": "normalize_description(description)",
+      "examples": [
+        {
+          "args": [
+            " Tea "
+          ],
+          "expect": "Tea"
+        },
+        {
+          "args": [
+            "Bus ticket"
+          ],
+          "expect": "Bus ticket"
+        },
+        {
+          "args": [
+            "   "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "validate_date accepts real ISO dates",
+      "description": "Create validate_date(date_text) in expense_manager/dates.py. Dates use the YYYY-MM-DD format.\n1. import datetime\n2. parsed = datetime.date.fromisoformat(date_text)\n3. return True\n",
+      "commit": "feat: add ISO date validation",
+      "tests": [
+        "tests/test_dates.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/dates.py"
+      ],
+      "context": [],
+      "function": "expense_manager.dates:validate_date",
+      "signature": "validate_date(date_text)",
+      "examples": [
+        {
+          "args": [
+            "2026-10-10"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "2024-02-29"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "2026-02-29"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            "10-10-2026"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "validate_kind permits income and expense",
+      "description": "Create validate_kind(kind) in expense_manager/kinds.py.\n1. if kind not in [\"expense\", \"income\"]: raise ValueError\n2. return True\n",
+      "commit": "feat: validate transaction kinds",
+      "tests": [
+        "tests/test_kinds.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/kinds.py"
+      ],
+      "context": [],
+      "function": "expense_manager.kinds:validate_kind",
+      "signature": "validate_kind(kind)",
+      "examples": [
+        {
+          "args": [
+            "expense"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "income"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "transfer"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "validate_transaction_values combines basic validation",
+      "description": "Create validate_transaction_values(amount_paise, date_text, kind) in expense_manager/transaction_validation.py. Use validate_amount from expense_manager/amounts.py, validate_date from expense_manager/dates.py, and validate_kind from expense_manager/kinds.py (already written, shown below).\n1. amount_ok = validate_amount(amount_paise)\n2. date_ok = validate_date(date_text)\n3. kind_ok = validate_kind(kind)\n4. return True\n",
+      "commit": "feat: combine transaction validation",
+      "tests": [
+        "tests/test_transaction_validation.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/transaction_validation.py"
+      ],
+      "context": [
+        "expense_manager/amounts.py",
+        "expense_manager/dates.py",
+        "expense_manager/kinds.py"
+      ],
+      "function": "expense_manager.transaction_validation:validate_transaction_values",
+      "signature": "validate_transaction_values(amount_paise, date_text, kind)",
+      "examples": [
+        {
+          "args": [
+            1250,
+            "2026-10-10",
+            "expense"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            50000,
+            "2024-02-29",
+            "income"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            0,
+            "2026-10-10",
+            "expense"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            1250,
+            "2026-02-29",
+            "expense"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            1250,
+            "2026-10-10",
+            "transfer"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "normalize_transaction_text normalizes both text fields",
+      "description": "Create normalize_transaction_text(category, description) in expense_manager/transaction_text.py. Use normalize_category from expense_manager/categories.py and normalize_description from expense_manager/descriptions.py (already written, shown below).\n1. normalized_category = normalize_category(category)\n2. normalized_description = normalize_description(description)\n3. return {\"category\": normalized_category, \"description\": normalized_description}\n",
+      "commit": "feat: normalize transaction text",
+      "tests": [
+        "tests/test_transaction_text.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/transaction_text.py"
+      ],
+      "context": [
+        "expense_manager/categories.py",
+        "expense_manager/descriptions.py"
+      ],
+      "function": "expense_manager.transaction_text:normalize_transaction_text",
+      "signature": "normalize_transaction_text(category, description)",
+      "examples": [
+        {
+          "args": [
+            " Food ",
+            " Tea "
+          ],
+          "expect": {
+            "category": "food",
+            "description": "Tea"
+          }
+        },
+        {
+          "args": [
+            "TRAVEL",
+            "Bus ticket"
+          ],
+          "expect": {
+            "category": "travel",
+            "description": "Bus ticket"
+          }
+        },
+        {
+          "args": [
+            "",
+            "Tea"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            "food",
+            "  "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "make_transaction creates the standard record",
+      "description": "Create make_transaction(transaction_id, amount_paise, category, description, date_text, kind) in expense_manager/make.py. A transaction has the shape {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use validate_transaction_values from expense_manager/transaction_validation.py and normalize_transaction_text from expense_manager/transaction_text.py (already written, shown below).\n1. if not isinstance(transaction_id, int) or isinstance(transaction_id, bool) or transaction_id <= 0: raise ValueError\n2. values_ok = validate_transaction_values(amount_paise, date_text, kind)\n3. text_fields = normalize_transaction_text(category, description)\n4. return {\"id\": transaction_id, \"amount_paise\": amount_paise, \"category\": text_fields[\"category\"], \"description\": text_fields[\"description\"], \"date\": date_text, \"kind\": kind}\n",
+      "commit": "feat: construct transaction records",
+      "tests": [
+        "tests/test_make.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/make.py"
+      ],
+      "context": [
+        "expense_manager/transaction_validation.py",
+        "expense_manager/transaction_text.py"
+      ],
+      "function": "expense_manager.make:make_transaction",
+      "signature": "make_transaction(transaction_id, amount_paise, category, description, date_text, kind)",
+      "examples": [
+        {
+          "args": [
+            1,
+            1250,
+            "Food",
+            "Tea",
+            "2026-10-10",
+            "expense"
+          ],
+          "expect": {
+            "id": 1,
+            "amount_paise": 1250,
+            "category": "food",
+            "description": "Tea",
+            "date": "2026-10-10",
+            "kind": "expense"
+          }
+        },
+        {
+          "args": [
+            2,
+            50000,
+            "Salary",
+            "October salary",
+            "2026-10-01",
+            "income"
+          ],
+          "expect": {
+            "id": 2,
+            "amount_paise": 50000,
+            "category": "salary",
+            "description": "October salary",
+            "date": "2026-10-01",
+            "kind": "income"
+          }
+        },
+        {
+          "args": [
+            0,
+            1250,
+            "food",
+            "Tea",
+            "2026-10-10",
+            "expense"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            3,
+            0,
+            "food",
+            "Tea",
+            "2026-10-10",
+            "expense"
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            3,
+            1250,
+            "food",
+            "Tea",
+            "2026-02-29",
+            "expense"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "next_transaction_id finds the next integer ID",
+      "description": "Create next_transaction_id(transactions) in expense_manager/ids.py. transactions is a list of records shaped like {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}.\n1. if len(transactions) == 0: return 1\n2. return max(item[\"id\"] for item in transactions) + 1\n",
+      "commit": "feat: generate transaction IDs",
+      "tests": [
+        "tests/test_ids.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/ids.py"
+      ],
+      "context": [],
+      "function": "expense_manager.ids:next_transaction_id",
+      "signature": "next_transaction_id(transactions)",
+      "examples": [
+        {
+          "args": [
+            []
+          ],
+          "expect": 1
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ]
+          ],
+          "expect": 2
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 2,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 7,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ]
+          ],
+          "expect": 8
+        }
+      ]
+    },
+    {
+      "title": "add_transaction appends a new record",
+      "description": "Create add_transaction(transactions, transaction) in expense_manager/add.py. Transactions are a list of records shaped like {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Return a NEW list and copy record dictionaries. Reject duplicate IDs.\n1. if any(item[\"id\"] == transaction[\"id\"] for item in transactions): raise ValueError\n2. result = [dict(item) for item in transactions]\n3. result.append(dict(transaction))\n4. return result\n",
+      "commit": "feat: add transactions to records",
+      "tests": [
+        "tests/test_add.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/add.py"
+      ],
+      "context": [],
+      "function": "expense_manager.add:add_transaction",
+      "signature": "add_transaction(transactions, transaction)",
+      "examples": [
+        {
+          "args": [
+            [],
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            {
+              "id": 2,
+              "amount_paise": 50000,
+              "category": "salary",
+              "description": "pay",
+              "date": "2026-10-01",
+              "kind": "income"
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 1250,
+              "category": "food",
+              "description": "tea",
+              "date": "2026-10-10",
+              "kind": "expense"
+            },
+            {
+              "id": 2,
+              "amount_paise": 50000,
+              "category": "salary",
+              "description": "pay",
+              "date": "2026-10-01",
+              "kind": "income"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            {
+              "id": 1,
+              "amount_paise": 2000,
+              "category": "food",
+              "description": "lunch",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "find_transaction locates a record by ID",
+      "description": "Create find_transaction(transactions, transaction_id) in expense_manager/find.py. transactions is a list of records shaped like {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}.\n1. For each item in transactions:\n   - if item[\"id\"] == transaction_id: return dict(item)\n2. raise KeyError\n",
+      "commit": "feat: find transactions by ID",
+      "tests": [
+        "tests/test_find.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/find.py"
+      ],
+      "context": [],
+      "function": "expense_manager.find:find_transaction",
+      "signature": "find_transaction(transactions, transaction_id)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1
+          ],
+          "expect": {
+            "id": 1,
+            "amount_paise": 1250,
+            "category": "food",
+            "description": "tea",
+            "date": "2026-10-10",
+            "kind": "expense"
+          }
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            7
+          ],
+          "raises": "KeyError"
+        },
+        {
+          "args": [
+            [],
+            1
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "replace_transaction replaces one existing record",
+      "description": "Create replace_transaction(transactions, transaction_id, updated_transaction) in expense_manager/replace.py. Transactions and updated_transaction use the standard transaction shape {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use find_transaction from expense_manager/find.py (already written, shown below). Return a NEW list and copy every record dictionary.\n1. found = find_transaction(transactions, transaction_id)\n2. if updated_transaction[\"id\"] != transaction_id: raise ValueError\n3. result = []\n4. For each item in transactions:\n   - if item[\"id\"] == transaction_id: result.append(dict(updated_transaction))\n   - else: result.append(dict(item))\n5. return result\n",
+      "commit": "feat: replace existing transactions",
+      "tests": [
+        "tests/test_replace.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/replace.py"
+      ],
+      "context": [
+        "expense_manager/find.py"
+      ],
+      "function": "expense_manager.replace:replace_transaction",
+      "signature": "replace_transaction(transactions, transaction_id, updated_transaction)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            {
+              "id": 1,
+              "amount_paise": 2000,
+              "category": "food",
+              "description": "lunch",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "amount_paise": 2000,
+              "category": "food",
+              "description": "lunch",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1,
+            {
+              "id": 2,
+              "amount_paise": 2000,
+              "category": "food",
+              "description": "lunch",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            [],
+            1,
+            {
+              "id": 1,
+              "amount_paise": 2000,
+              "category": "food",
+              "description": "lunch",
+              "date": "2026-10-10",
+              "kind": "expense"
+            }
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "remove_transaction deletes an existing record",
+      "description": "Create remove_transaction(transactions, transaction_id) in expense_manager/remove.py. Transactions use the standard record shape {\"id\": 1, \"amount_paise\": 1250, \"category\": \"food\", \"description\": \"tea\", \"date\": \"2026-10-10\", \"kind\": \"expense\"}. Use find_transaction from expense_manager/find.py (already written, shown below) to reject a missing ID. Return a NEW list.\n1. found = find_transaction(transactions, transaction_id)\n2. result = [dict(item) for item in transactions if item[\"id\"] != transaction_id]\n3. return result\n",
+      "commit": "feat: remove transactions",
+      "tests": [
+        "tests/test_remove.py"
+      ],
+      "files": [
+        "expense_manager/__init__.py",
+        "expense_manager/remove.py"
+      ],
+      "context": [
+        "expense_manager/find.py"
+      ],
+      "function": "expense_manager.remove:remove_transaction",
+      "signature": "remove_transaction(transactions, transaction_id)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              }
+            ],
+            1
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "amount_paise": 1250,
+                "category": "food",
+                "description": "tea",
+                "date": "2026-10-10",
+                "kind": "expense"
+              },
+              {
+                "id": 2,
+                "amount_paise": 50000,
+                "category": "salary",
+                "description": "pay",
+                "date": "2026-10-01",
+                "kind": "income"
+              }
+            ],
+            1
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "amount_paise": 50000,
+              "category": "salary",
+              "description": "pay",
+              "date": "2026-10-01",
+              "kind": "income"
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            1
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    }
+  ]
+}
