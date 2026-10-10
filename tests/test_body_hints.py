@@ -6,6 +6,7 @@ from agent import (
     Workspace,
     build_impl_prompt,
     context_imports,
+    missing_named_files,
     parse_plan,
     step_context,
 )
@@ -106,3 +107,10 @@ def test_the_same_body_with_different_imports_still_counts_as_a_repeat(tmp_path,
     r, _ = make_body_runner(tmp_path, llm, cfg, log=lines.append)
     assert r.run().outcome == "done"
     assert any("same code as attempt 1" in ln for ln in lines)
+
+
+def test_a_file_named_in_the_description_but_missing_from_the_workspace_is_reported():
+    step = make_plan().steps[0]
+    assert missing_named_files(step, {"cart/merge.py": MERGE, "cart/checks.py": None}) == ["cart/checks.py"]
+    assert missing_named_files(step, {"cart/merge.py": MERGE, "cart/checks.py": "  \n"}) == ["cart/checks.py"]
+    assert missing_named_files(step, {"cart/merge.py": MERGE, "cart/checks.py": CHECKS}) == []
