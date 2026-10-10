@@ -161,13 +161,14 @@ Rules:
 * **One statement per line.** Write a loop as its own line (`For each ch in text:`) with the statements under it as
   `-` bullets. Never put a `for` and an `if` on the same line, and never join two statements with `and` or `;`
   (the model copies the shape literally and writes invalid Python such as
-  `for ch in text.lower(): if ch.isalnum(): ...`). Branches are `- if ...:` and `- else:` bullets; an `if` that
+  `for ch in text.lower(): if ch.isalnum(): ...`). A recipe line `best_name = None and best_avg = None` was copied
+  verbatim into the code and failed all 6 attempts: write `best_name = None` and `best_avg = None` as two lines. Branches are `- if ...:` and `- else:` bullets; an `if` that
   needs two statements gets one nested `-` bullet per statement.
 * Put error checks first, in the order the examples test them.
 * **Write checks and early returns as code, not English.** `2. if len(text) <= limit: return text` is followed;
   `2. If the text already fits, return it.` was skipped on all 6 attempts (the model kept the other two lines and
   dropped that one). Use real conditions (`if len(scores) == 0: raise ValueError`), one short statement after the colon.
-* **Keep a recipe short: at most 5 numbered lines and one loop.** A 0.8B model skips steps in a longer recipe
+* **Keep a recipe short: at most 6 numbered lines and one loop** (`codeagent check` warns beyond that). A 0.8B model skips steps in a longer recipe
   (a 6-line, two-loop `most_common_word` failed all 6 attempts: it replaced `best = order[0]` with
   `best = None` and dropped an update). Split it instead: `word_counts(text)` in one step, then
   `most_common_word(text)` using `word_counts` in the next. Thinking mode did not rescue it.
@@ -189,13 +190,18 @@ This step failed all 6 attempts. The model wrote `append(item)` in both branches
    item["quantity"] + quantity; otherwise append the item unchanged.
 ```
 
-The same step, rewritten as a recipe, passed on attempt 1:
+The same step, rewritten as a recipe, passed on attempt 1 (the one-line form below worked; one statement per line
+is safer still):
 
 ```
 1. result = []
 2. For each item in cart:
-   - if item["name"] == name: new_item = dict(item); new_item["quantity"] = item["quantity"] + quantity; result.append(new_item)
-   - else: result.append(item)
+   - if item["name"] == name:
+     - new_item = dict(item)
+     - new_item["quantity"] = item["quantity"] + quantity
+     - result.append(new_item)
+   - else:
+     - result.append(item)
 3. return result
 ```
 
@@ -225,46 +231,144 @@ step by step and check the result is exact in floating point.
   "steps": [
     {
       "title": "check_args validates price and quantity",
-      "description": "Create check_args(price, quantity) in cart/checks.py.\n1. If price is less than 0, or quantity is 0 or less, raise ValueError.\n2. Otherwise return True.\n",
+      "description": "Create check_args(price, quantity) in cart/checks.py.\n1. if price < 0: raise ValueError\n2. if quantity <= 0: raise ValueError\n3. return True\n",
       "commit": "feat: add cart check_args",
-      "tests": ["tests/test_checks.py"],
-      "files": ["cart/__init__.py", "cart/checks.py"],
+      "tests": [
+        "tests/test_checks.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/checks.py"
+      ],
       "function": "cart.checks:check_args",
       "signature": "check_args(price, quantity)",
       "examples": [
-        {"args": [1.5, 1], "expect": true},
-        {"args": [0.0, 1], "expect": true},
-        {"args": [-1.0, 1], "raises": "ValueError"},
-        {"args": [1.5, 0], "raises": "ValueError"}
+        {
+          "args": [
+            1.5,
+            1
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            0.0,
+            1
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            -1.0,
+            1
+          ],
+          "raises": "ValueError"
+        },
+        {
+          "args": [
+            1.5,
+            0
+          ],
+          "raises": "ValueError"
+        }
       ]
     },
     {
       "title": "merge_quantity raises the quantity of one item",
-      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] == name: new_item = dict(item); new_item[\"quantity\"] = item[\"quantity\"] + quantity; result.append(new_item)\n   - else: result.append(item)\n3. return result\n",
+      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] == name:\n     - new_item = dict(item)\n     - new_item[\"quantity\"] = item[\"quantity\"] + quantity\n     - result.append(new_item)\n   - else:\n     - result.append(item)\n3. return result\n",
       "commit": "feat: add cart merge_quantity",
-      "tests": ["tests/test_merge.py"],
-      "files": ["cart/__init__.py", "cart/merge.py"],
+      "tests": [
+        "tests/test_merge.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/merge.py"
+      ],
       "function": "cart.merge:merge_quantity",
       "signature": "merge_quantity(cart, name, quantity)",
       "examples": [
-        {"args": [[{"name": "apple", "price": 1.5, "quantity": 1}], "apple", 2],
-         "expect": [{"name": "apple", "price": 1.5, "quantity": 3}]},
-        {"args": [[{"name": "apple", "price": 1.5, "quantity": 1}], "kiwi", 1],
-         "expect": [{"name": "apple", "price": 1.5, "quantity": 1}]}
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "apple",
+            2
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 3
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "name": "apple",
+                "price": 1.5,
+                "quantity": 1
+              }
+            ],
+            "kiwi",
+            1
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            }
+          ]
+        }
       ]
     },
     {
       "title": "add_item adds an item to the cart",
-      "description": "Create add_item(cart, name, price, quantity=1) in cart/engine.py. Use check_args from cart/checks.py and\nmerge_quantity from cart/merge.py (already written, shown below). Return a NEW list; never change the input cart.\n1. Call check_args(price, quantity).\n2. If any item in cart has this name, return merge_quantity(cart, name, quantity).\n3. Otherwise return a new list: all the cart items, then a new dict {\"name\": name, \"price\": price, \"quantity\": quantity}.\n",
+      "description": "Create add_item(cart, name, price, quantity=1) in cart/engine.py. Use check_args from cart/checks.py and\nmerge_quantity from cart/merge.py (already written, shown below). Return a NEW list; never change the input cart.\n1. check_args(price, quantity)\n2. if any(item[\"name\"] == name for item in cart): return merge_quantity(cart, name, quantity)\n3. return [*cart, {\"name\": name, \"price\": price, \"quantity\": quantity}]\n",
       "commit": "feat: add cart add_item",
-      "tests": ["tests/test_engine.py"],
-      "files": ["cart/__init__.py", "cart/engine.py"],
-      "context": ["cart/checks.py", "cart/merge.py"],
+      "tests": [
+        "tests/test_engine.py"
+      ],
+      "files": [
+        "cart/__init__.py",
+        "cart/engine.py"
+      ],
+      "context": [
+        "cart/checks.py",
+        "cart/merge.py"
+      ],
       "function": "cart.engine:add_item",
       "signature": "add_item(cart, name, price, quantity=1)",
       "examples": [
-        {"args": [[], "apple", 1.5], "expect": [{"name": "apple", "price": 1.5, "quantity": 1}]},
-        {"args": [[], "apple", -1.0], "raises": "ValueError"}
+        {
+          "args": [
+            [],
+            "apple",
+            1.5
+          ],
+          "expect": [
+            {
+              "name": "apple",
+              "price": 1.5,
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "apple",
+            -1.0
+          ],
+          "raises": "ValueError"
+        }
       ]
     }
   ]
@@ -299,7 +403,9 @@ codeagent run plan-1-core.json --workspace ~/agent-projects/<project> --live
 codeagent run plan-2-rules.json --workspace ~/agent-projects/<project> --live
 ```
 
-Finished steps are skipped on a rerun. A step whose description or examples were edited runs again.
+`codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly
+(joined statements, a loop and its body on one line, English conditions, recipes that are too long): fix every warning
+before running. Finished steps are skipped on a rerun. A step whose description or examples were edited runs again.
 
 ---
 
@@ -315,7 +421,7 @@ Go through every step and answer yes to each:
 - [ ] Data shapes are written out literally in the description.
 - [ ] Every branch and every `raises` has an example; each expected value was checked by hand.
 - [ ] No `null`, tuple, set or inexact float anywhere in the examples.
-- [ ] The body is at most about 8 lines, with at most one loop; the recipe has at most 5 numbered lines.
+- [ ] The body is at most about 8 lines, with at most one loop; the recipe has at most 6 numbered lines.
 - [ ] Every loop is on its own line with its statements as bullets underneath; no `and`/`;` joining statements.
 - [ ] Titles and commits are unique/valid; commit lines are at most 72 characters.
 - [ ] Everything that is not a pure function is listed under "Hand-written parts".
