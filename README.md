@@ -130,6 +130,11 @@ for a 5-line body, while the same call without thinking answered in 8 seconds. S
 to bring thinking back. The harness also writes the `from pkg.mod import name` lines for every context function
 named in the step description, and always puts the planned signature back if the model rewrote the def line.
 
+Files the step description names (like "use check_args from cart/checks.py") are shown to the model and imported
+for it even if the plan's `context` forgot them. A retry that hides the model's old code still shows those files,
+and the failing-test report names the real call (`add_item([], 'a') must raise ValueError, but it returned normally`)
+instead of `test_example_4`. `CODEAGENT_MAX_ATTEMPTS` now defaults to 6, because calls without thinking take seconds.
+
 Settings that matter for loops: `CODEAGENT_TEMPERATURE` (about 0.6 for thinking models; too low loops more),
 `CODEAGENT_TOP_P` / `CODEAGENT_TOP_K` (0.95 / 20 by default), `CODEAGENT_REPEAT_PENALTY` (1.1),
 `CODEAGENT_NUM_PREDICT`. `CODEAGENT_THINK_LEVEL` only affects gpt-oss models; other models think on or off.

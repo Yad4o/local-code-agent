@@ -40,7 +40,8 @@ def test_context_functions_named_in_the_description_are_imported_for_the_model()
 
 
 def test_unmentioned_functions_missing_files_and_the_step_itself_are_not_imported():
-    step = make_step(context=["cart/other.py", "cart/missing.py", "cart/engine.py"])
+    step = make_step(description="Create add_item(cart, name). It does a simple thing.",
+                     context=["cart/other.py", "cart/missing.py", "cart/engine.py"])
     assert context_imports(step, {**SOURCES, "cart/engine.py": "def add_item(cart, name):\n    pass\n"}) == []
 
 
