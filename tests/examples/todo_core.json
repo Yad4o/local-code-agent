@@ -1,0 +1,478 @@
+{
+  "title": "Todo Core",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "next_id picks the next free task id",
+      "description": "Create next_id(tasks) in todo/ids.py. tasks is a list of task dicts. Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\n1. if len(tasks) == 0: return 1\n2. biggest = 0\n3. For each task in tasks:\n   - if task[\"id\"] > biggest: biggest = task[\"id\"]\n4. return biggest + 1\n",
+      "commit": "feat: add next_id",
+      "tests": [
+        "tests/test_ids.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/ids.py"
+      ],
+      "function": "todo.ids:next_id",
+      "signature": "next_id(tasks)",
+      "examples": [
+        {
+          "args": [
+            []
+          ],
+          "expect": 1
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ]
+          ],
+          "expect": 2
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 3,
+                "text": "tea",
+                "done": false
+              }
+            ]
+          ],
+          "expect": 4
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 3,
+                "text": "tea",
+                "done": false
+              },
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ]
+          ],
+          "expect": 4
+        }
+      ]
+    },
+    {
+      "title": "add_task adds a new open task",
+      "description": "Create add_task(tasks, text) in todo/add.py. Use next_id from todo/ids.py (already written, shown below). Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\nReturn a NEW list; never change the input list.\n1. if len(text.strip()) == 0: raise ValueError\n2. new_task = {\"id\": next_id(tasks), \"text\": text.strip(), \"done\": False}\n3. return [*tasks, new_task]\n",
+      "commit": "feat: add add_task",
+      "tests": [
+        "tests/test_add.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/add.py"
+      ],
+      "context": [
+        "todo/ids.py"
+      ],
+      "function": "todo.add:add_task",
+      "signature": "add_task(tasks, text)",
+      "examples": [
+        {
+          "args": [
+            [],
+            "milk"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            "  eggs "
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            },
+            {
+              "id": 2,
+              "text": "eggs",
+              "done": false
+            }
+          ]
+        },
+        {
+          "args": [
+            [],
+            "   "
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "complete_task marks one task as done",
+      "description": "Create complete_task(tasks, task_id) in todo/complete.py. Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\nReturn a NEW list; never change the input list.\n1. result = []\n2. found = False\n3. For each task in tasks:\n   - if task[\"id\"] == task_id:\n     - new_task = dict(task)\n     - new_task[\"done\"] = True\n     - result.append(new_task)\n     - found = True\n   - else:\n     - result.append(task)\n4. if found == False: raise KeyError\n5. return result\n",
+      "commit": "feat: add complete_task",
+      "tests": [
+        "tests/test_complete.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/complete.py"
+      ],
+      "function": "todo.complete:complete_task",
+      "signature": "complete_task(tasks, task_id)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 3,
+                "text": "tea",
+                "done": false
+              }
+            ],
+            3
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            },
+            {
+              "id": 3,
+              "text": "tea",
+              "done": true
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            1
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": true
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            9
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "remove_task deletes one task",
+      "description": "Create remove_task(tasks, task_id) in todo/remove.py. Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\nReturn a NEW list; never change the input list.\n1. result = []\n2. For each task in tasks:\n   - if task[\"id\"] != task_id:\n     - result.append(task)\n3. if len(result) == len(tasks): raise KeyError\n4. return result\n",
+      "commit": "feat: add remove_task",
+      "tests": [
+        "tests/test_remove.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/remove.py"
+      ],
+      "function": "todo.remove:remove_task",
+      "signature": "remove_task(tasks, task_id)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              }
+            ],
+            1
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "text": "eggs",
+              "done": true
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            1
+          ],
+          "expect": []
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            5
+          ],
+          "raises": "KeyError"
+        }
+      ]
+    },
+    {
+      "title": "filter_tasks keeps all, done or open tasks",
+      "description": "Create filter_tasks(tasks, status) in todo/filt.py. status is \"all\", \"done\" or \"open\". Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\n1. if status == \"all\": return list(tasks)\n2. if status == \"done\": return [task for task in tasks if task[\"done\"]]\n3. if status == \"open\": return [task for task in tasks if not task[\"done\"]]\n4. raise ValueError\n",
+      "commit": "feat: add filter_tasks",
+      "tests": [
+        "tests/test_filt.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/filt.py"
+      ],
+      "function": "todo.filt:filter_tasks",
+      "signature": "filter_tasks(tasks, status)",
+      "examples": [
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              }
+            ],
+            "all"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            },
+            {
+              "id": 2,
+              "text": "eggs",
+              "done": true
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              }
+            ],
+            "done"
+          ],
+          "expect": [
+            {
+              "id": 2,
+              "text": "eggs",
+              "done": true
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              }
+            ],
+            "open"
+          ],
+          "expect": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            }
+          ]
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              }
+            ],
+            "later"
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "format_task prints one task as a line of text",
+      "description": "Create format_task(task) in todo/fmt.py. Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\n1. mark = \" \"\n2. if task[\"done\"]: mark = \"x\"\n3. return \"[\" + mark + \"] \" + str(task[\"id\"]) + \" \" + task[\"text\"]\n",
+      "commit": "feat: add format_task",
+      "tests": [
+        "tests/test_fmt.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/fmt.py"
+      ],
+      "function": "todo.fmt:format_task",
+      "signature": "format_task(task)",
+      "examples": [
+        {
+          "args": [
+            {
+              "id": 1,
+              "text": "milk",
+              "done": false
+            }
+          ],
+          "expect": "[ ] 1 milk"
+        },
+        {
+          "args": [
+            {
+              "id": 2,
+              "text": "eggs",
+              "done": true
+            }
+          ],
+          "expect": "[x] 2 eggs"
+        }
+      ]
+    },
+    {
+      "title": "summarize counts open and done tasks",
+      "description": "Create summarize(tasks) in todo/summary.py. Each task is a dict {\"id\", \"text\", \"done\"}, for example {\"id\": 1, \"text\": \"milk\", \"done\": False}.\n1. done = 0\n2. For each task in tasks:\n   - if task[\"done\"]: done = done + 1\n3. return str(len(tasks) - done) + \" open, \" + str(done) + \" done\"\n",
+      "commit": "feat: add summarize",
+      "tests": [
+        "tests/test_summary.py"
+      ],
+      "files": [
+        "todo/__init__.py",
+        "todo/summary.py"
+      ],
+      "function": "todo.summary:summarize",
+      "signature": "summarize(tasks)",
+      "examples": [
+        {
+          "args": [
+            []
+          ],
+          "expect": "0 open, 0 done"
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 1,
+                "text": "milk",
+                "done": false
+              },
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              },
+              {
+                "id": 3,
+                "text": "tea",
+                "done": false
+              }
+            ]
+          ],
+          "expect": "2 open, 1 done"
+        },
+        {
+          "args": [
+            [
+              {
+                "id": 2,
+                "text": "eggs",
+                "done": true
+              }
+            ]
+          ],
+          "expect": "0 open, 1 done"
+        }
+      ]
+    }
+  ]
+}

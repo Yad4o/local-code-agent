@@ -251,6 +251,11 @@ More example plans: `tests/examples/cart_totals.json` (steps that call earlier s
 assignments joined with `and`, a loop and its body on one line, `;`-joined statements, English conditions, recipes
 longer than 6 lines or with two loops); fix them before running.
 
+### A small complete app: Todo list
+
+`tests/examples/todo_core.json` builds a todo list's pure core (7 functions); `examples/todo/` holds the hand-written
+glue (JSON file storage and a command line) with its own tests. Steps and commands: `examples/todo/README.md`.
+
 ### Building something big
 
 Split it into **pure functions** (data in, data out) and build those with plans; write the glue that touches the
