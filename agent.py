@@ -6,6 +6,7 @@ next; the model only answers narrow questions.
 """
 import argparse
 import ast
+import copy
 import builtins
 import fcntl
 import hashlib
@@ -563,6 +564,7 @@ class Config:
                                                 # that thinks about a 5-line body wanders for minutes and answers worse)
     think_body_after: int = 0                   # a body that failed this many attempts WITHOUT thinking is tried with thinking
                                                 # (still bounded by max_think_chars); 0 = never
+    context_view: str = "signatures"             # helper files in a body prompt: "signatures" (def lines only) or "full" code
     temperature_no_think: float = 0.3           # temperature for calls that run without thinking
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
     top_p: float = 0.95                         # sampling cut-offs recommended for Qwen; 0 = leave to the server
@@ -619,6 +621,8 @@ def load_config() -> Config:
             setattr(cfg, f.name, _from_env(f.name, raw, getattr(cfg, f.name)))
     if cfg.backend not in ("ollama", "openai"):
         raise ConfigError(f"backend: must be 'ollama' or 'openai', got {cfg.backend!r}")
+    if cfg.context_view not in ("signatures", "full"):
+        raise ConfigError(f"context_view: must be 'signatures' or 'full', got {cfg.context_view!r}")
     if cfg.think_level not in ("low", "medium", "high"):
         raise ConfigError(f"think_level: must be low, medium or high, got {cfg.think_level!r}")
     return cfg
@@ -1941,8 +1945,32 @@ def _name_the_calls(report: str, name: str, examples: tuple[Example, ...]) -> st
     return re.sub(r"^test_example_(\d+)(?:_raises_\w+)?: (.*)$", line, report, flags=re.M)
 
 
+def signature_view(source: str) -> str | None:
+    """`def name(args): ...` for every top-level function of a module (first docstring line kept), or None when
+    there is none or the source does not parse. A tiny model shown a helper's whole body tends to paste it
+    instead of calling it; the signature is all it needs to call it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    blocks = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            head = ("async def " if isinstance(node, ast.AsyncFunctionDef) else "def ") + f"{node.name}({ast.unparse(node.args)})"
+            if node.returns is not None:
+                head += f" -> {ast.unparse(node.returns)}"
+            lines = [head + ":"]
+            doc = ast.get_docstring(node)
+            if doc:
+                lines.append(f'    """{doc.splitlines()[0]}"""')
+            lines.append("    ...")
+            blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) or None
+
+
 def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
-                      budget: int, test_output: str | None, feedback: str | None) -> list[dict]:
+                      budget: int, test_output: str | None, feedback: str | None,
+                      context_view: str = "signatures") -> list[dict]:
     """Skeleton mode: the model sees the task, the def line, the examples, how its last body failed, and
     what the tests said. Never the pytest file, the package __init__, or a whole module with a def line."""
     path, name = module_path(step), _function_name(step)
@@ -1954,7 +1982,14 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         parts.append("These tests must pass:\n" + _fit(dict(tests), budget // 2))
     ctx = {p: existing.get(p) for p in step_context(step)}
     if any(v is not None for v in ctx.values()):
-        parts.append("Related files (read-only):\n" + _fit(ctx, budget // 2))
+        header = "Related files (read-only):"
+        if context_view == "signatures":
+            shown = {p: (signature_view(v) if v else None) for p, v in ctx.items()}
+            if any(shown.values()):
+                ctx = {p: shown[p] or v for p, v in ctx.items()}
+                header = ("Functions you can call (read-only; only their signatures are shown, so call them "
+                          "and do not rewrite their code):")
+        parts.append(header + "\n" + _fit(ctx, budget // 2))
     ready = [ln.rsplit(" import ", 1)[1] for ln in context_imports(step, existing)]
     if ready:
         parts.append("Already imported for you: " + ", ".join(ready) + ". Do not write imports for them.")
@@ -2000,9 +2035,10 @@ def build_tests_prompt(plan: Plan, step: Step, existing: dict[str, str | None], 
 
 
 def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
-                  budget: int, test_output: str | None, feedback: str | None) -> list[dict]:
+                  budget: int, test_output: str | None, feedback: str | None,
+                  context_view: str = "signatures") -> list[dict]:
     if step.signature:
-        return build_body_prompt(plan, step, tests, existing, budget, test_output, feedback)
+        return build_body_prompt(plan, step, tests, existing, budget, test_output, feedback, context_view)
     parts = [
         _header(plan, step),
         "These tests must pass. Do NOT change the tests:\n" + _fit(dict(tests), budget // 2),
@@ -2313,7 +2349,7 @@ class Runner:
                 existing.update({p: None for p in step.files})
 
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
-                                               self.cfg.max_context_chars, output, feedback),
+                                               self.cfg.max_context_chars, output, feedback, self.cfg.context_view),
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
                              stop=BODY_STOP if step.signature else None, bump=0.15 * repeats,
@@ -2754,6 +2790,433 @@ def cmd_smoke(args, out, **_):
     return EXIT_OK
 
 
+# ==========================================================================
+# consolidate
+# A finished plan leaves one tiny module (and one test file) per function. This merges them into a few
+# themed modules, deterministically (no model): imports are rewritten, __init__ re-exports are kept, test
+# names are kept unique, and the whole test suite must still pass with the same number of tests, or
+# everything is put back.
+# ==========================================================================
+
+class ConsolidateError(Exception):
+    pass
+
+
+MARKER = "consolidated.json"
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "core"
+
+
+def suggest_groups(plans: list[Plan]) -> dict:
+    """A starter groups file: one new module per plan, named from the plan title."""
+    package = None
+    modules: list[list[str]] = []
+    for plan in plans:
+        mods = []
+        for step in plan.steps:
+            head, _, _ = step.function.partition(":")
+            parts = head.split(".")
+            if len(parts) != 2:
+                raise ConsolidateError(f"step {step.title!r}: function {step.function!r} is not package.module:name")
+            package = package or parts[0]
+            if parts[0] != package:
+                raise ConsolidateError("the plans use more than one package; consolidate one package at a time")
+            if parts[1] not in mods:
+                mods.append(parts[1])
+        modules.append(mods)
+    words = [re.sub(r"[^A-Za-z0-9 ]+", " ", p.title).split() for p in plans]
+    common = 0
+    while len(plans) > 1 and all(len(w) > common + 1 for w in words) and len({w[common].lower() for w in words}) == 1:
+        common += 1
+    names: list[str] = []
+    for w in words:
+        name = _slug(" ".join(w[common:]))
+        if name in names or name == package:
+            name = _slug(" ".join(w))
+        names.append(name)
+    return {"package": package, "modules": dict(zip(names, modules))}
+
+
+def load_groups(path: str | Path) -> tuple[str, dict[str, list[str]]]:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise ConsolidateError(f"cannot read {path}: {e}") from e
+    package, modules = raw.get("package") if isinstance(raw, dict) else None, raw.get("modules") if isinstance(raw, dict) else None
+    if not isinstance(package, str) or not package.isidentifier():
+        raise ConsolidateError("groups file: 'package' must be the package name, e.g. \"expense_manager\"")
+    if not isinstance(modules, dict) or not modules:
+        raise ConsolidateError("groups file: 'modules' must map each new module name to a list of old module names")
+    out: dict[str, list[str]] = {}
+    for new, olds in modules.items():
+        if not new.isidentifier() or new == "__init__":
+            raise ConsolidateError(f"groups file: {new!r} is not a usable module name")
+        if not isinstance(olds, list) or not olds or not all(isinstance(o, str) and o.isidentifier() for o in olds):
+            raise ConsolidateError(f"groups file: {new!r} must list one or more old module names")
+        out[new] = list(dict.fromkeys(olds))
+    seen: dict[str, str] = {}
+    for new, olds in out.items():
+        for o in olds:
+            if o in seen:
+                raise ConsolidateError(f"module {o!r} is in both {seen[o]!r} and {new!r}")
+            seen[o] = new
+    return package, out
+
+
+@dataclass
+class Consolidation:
+    writes: dict[str, str]
+    deletes: list[str]
+    summary: list[tuple[str, list[str], list[str]]]      # (new module, old modules, names it now holds)
+    untouched: list[str]
+
+
+def _segment(lines: list[str], node: ast.stmt) -> str:
+    start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+    return "\n".join(lines[start - 1:node.end_lineno])
+
+
+def _defined_names(node: ast.stmt) -> list[str]:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.Assign):
+        return [t.id for t in node.targets if isinstance(t, ast.Name)]
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return [node.target.id]
+    return []
+
+
+def _drop_unused_call_assigns(func: ast.FunctionDef | ast.AsyncFunctionDef):
+    """`x = f(...)` where x is never read in the function becomes `f(...)`. Returns (new function, changed)."""
+    loaded = {n.id for n in ast.walk(func) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    changed = False
+    body = []
+    for stmt in func.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id not in loaded and isinstance(stmt.value, ast.Call)):
+            body.append(ast.copy_location(ast.Expr(value=stmt.value), stmt))
+            changed = True
+        else:
+            body.append(stmt)
+    if changed:
+        func = ast.fix_missing_locations(ast.copy_location(type(func)(**{**{f: getattr(func, f) for f in func._fields}, "body": body}), func))
+    return func, changed
+
+
+class _Imports:
+    """Imports of one new module: external ones merged and de-duplicated, internal ones pointed at the new module."""
+
+    def __init__(self) -> None:
+        self.plain: list[tuple[str, str | None]] = []
+        self.froms: dict[str, list[tuple[str, str | None]]] = {}
+        self.raw: list[str] = []
+        self.internal: dict[str, list[str]] = {}
+
+    def add_plain(self, name: str, asname: str | None) -> None:
+        if (name, asname) not in self.plain:
+            self.plain.append((name, asname))
+
+    def add_from(self, module: str, name: str, asname: str | None) -> None:
+        bucket = self.froms.setdefault(module, [])
+        if (name, asname) not in bucket:
+            bucket.append((name, asname))
+
+    def add_internal(self, group: str, name: str) -> None:
+        bucket = self.internal.setdefault(group, [])
+        if name not in bucket:
+            bucket.append(name)
+
+    @staticmethod
+    def _from_line(module: str, names: list[str]) -> str:
+        one = f"from {module} import {', '.join(names)}"
+        if len(one) <= 99:
+            return one
+        return f"from {module} import (\n" + "".join(f"    {n},\n" for n in names) + ")"
+
+    def render(self, package: str, own_group: str) -> str:
+        external = [f"import {n}" + (f" as {a}" if a else "") for n, a in sorted(self.plain, key=lambda t: (t[0], t[1] or ""))]
+        external += [self._from_line(m, [n + (f" as {a}" if a else "") for n, a in sorted(names, key=lambda t: t[0])])
+                     for m, names in sorted(self.froms.items())]
+        external += [r for r in self.raw if r not in external]
+        internal = [self._from_line(f"{package}.{g}", names) for g, names in sorted(self.internal.items()) if g != own_group]
+        return "\n".join(external) + ("\n\n" if external and internal else "") + "\n".join(internal)
+
+
+def _internal_target(node: ast.ImportFrom, package: str) -> str | None:
+    """The old module an import points at (absolute `package.x` or relative `.x`), else None."""
+    if node.level == 0 and node.module and node.module.startswith(package + "."):
+        rest = node.module[len(package) + 1:]
+        return rest if "." not in rest else None
+    if node.level == 1 and node.module and "." not in node.module:
+        return node.module
+    return None
+
+
+def _rewrite_module_aliases(node: ast.stmt, aliases: dict[str, str]) -> tuple[ast.stmt, list[tuple[str, str]]]:
+    """`alias.name` -> `name`, where alias stands for one of the old modules. Returns (new node, [(old module, name)])."""
+    used: list[tuple[str, str]] = []
+
+    class Rewrite(ast.NodeTransformer):
+        def visit_Attribute(self, n: ast.Attribute):
+            self.generic_visit(n)
+            if isinstance(n.value, ast.Name) and n.value.id in aliases:
+                used.append((aliases[n.value.id], n.attr))
+                return ast.copy_location(ast.Name(id=n.attr, ctx=n.ctx), n)
+            return n
+
+    new = ast.fix_missing_locations(Rewrite().visit(copy.deepcopy(node)))
+    left = [n.id for n in ast.walk(new) if isinstance(n, ast.Name) and n.id in aliases]
+    if left:
+        raise ConsolidateError(f"the module name {left[0]!r} is used on its own, not as {left[0]}.something, so it cannot be rewritten")
+    return new, used
+
+
+def _split_module(src: str, package: str, owner: dict[str, str], imports: _Imports, own_group: str, *,
+                  tidy: bool, label: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Parse one source file: feed its imports into `imports`, return its other top-level statements as
+    [(source text, first defined name)] and the names it defines."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        raise ConsolidateError(f"{label}: cannot parse ({e.msg}, line {e.lineno})") from e
+    lines = src.splitlines()
+    pieces: list[tuple[str, str]] = []
+    names: list[str] = []
+    aliases: dict[str, str] = {}                  # local name -> old module it stands for (`from pkg import mod as m`)
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and ((node.level == 0 and node.module == package) or (node.level == 1 and not node.module)):
+            aliases.update({a.asname or a.name: a.name for a in node.names if a.name in owner})
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.startswith(package + ".") and a.name[len(package) + 1:] in owner:
+                    if not a.asname:
+                        raise ConsolidateError(f"{label}: 'import {a.name}' (without 'as') cannot be rewritten")
+                    aliases[a.asname] = a.name[len(package) + 1:]
+    for i, node in enumerate(tree.body):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if not (a.name.startswith(package + ".") and a.name[len(package) + 1:] in owner):
+                    imports.add_plain(a.name, a.asname)
+        elif isinstance(node, ast.ImportFrom):
+            old = _internal_target(node, package)
+            if old is not None and old in owner:
+                for a in node.names:
+                    if a.name == "*":
+                        raise ConsolidateError(f"{label}: 'import *' from {old} cannot be rewritten")
+                    if owner[old] != own_group:
+                        imports.add_internal(owner[old], a.name + (f" as {a.asname}" if a.asname else ""))
+            elif node.level == 0 and node.module:
+                for a in node.names:
+                    if not (node.module == package and a.name in aliases.values()):
+                        imports.add_from(node.module, a.name, a.asname)
+            elif not (node.level == 1 and not node.module and all(a.name in aliases.values() for a in node.names)):
+                imports.raw.append(_segment(lines, node))
+        elif i == 0 and isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant) \
+                and isinstance(node.value.value, str):
+            continue                                             # a module docstring belongs to the old file
+        else:
+            text = _segment(lines, node)
+            if aliases:
+                node, used = _rewrite_module_aliases(node, aliases)
+                for old, attr in used:
+                    if owner[old] != own_group:
+                        imports.add_internal(owner[old], attr)
+                if used:
+                    text = ast.unparse(node)
+            if tidy and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                new, changed = _drop_unused_call_assigns(node)
+                if changed:
+                    text = ast.unparse(new)
+            defined = _defined_names(node)
+            pieces.append((text, defined[0] if defined else ""))
+            names += defined
+    return pieces, names
+
+
+def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    state: dict[str, int] = {}
+
+    def visit(node: str, path: list[str]) -> list[str] | None:
+        state[node] = 1
+        for nxt in sorted(graph.get(node, ())):
+            if state.get(nxt) == 1:
+                return path[path.index(nxt):] + [nxt] if nxt in path else [node, nxt]
+            if nxt not in state:
+                found = visit(nxt, path + [nxt])
+                if found:
+                    return found
+        state[node] = 2
+        return None
+
+    for n in sorted(graph):
+        if n not in state:
+            found = visit(n, [n])
+            if found:
+                return found
+    return None
+
+
+def consolidate_sources(package: str, groups: dict[str, list[str]], modules: dict[str, str], tests: dict[str, str],
+                        init_text: str | None, *, tidy: bool = True) -> Consolidation:
+    """Pure core. `modules` maps old module name -> source, `tests` maps old module name -> its test source."""
+    owner = {old: new for new, olds in groups.items() for old in olds}
+    for new, olds in groups.items():
+        for old in olds:
+            if old not in modules:
+                raise ConsolidateError(f"{package}/{old}.py does not exist (listed under {new!r})")
+        if new in modules and new not in olds:
+            raise ConsolidateError(f"the new module name {new!r} is already a module that is not in that group; "
+                                   f"pick another name or add {new!r} to the group")
+    writes: dict[str, str] = {}
+    deletes: list[str] = []
+    summary: list[tuple[str, list[str], list[str]]] = []
+    graph: dict[str, set[str]] = {g: set() for g in groups}
+    for new, olds in groups.items():
+        imports = _Imports()
+        pieces: list[str] = []
+        held: list[str] = []
+        for old in olds:
+            body, names = _split_module(modules[old], package, owner, imports, new, tidy=tidy, label=f"{package}/{old}.py")
+            for n in names:
+                if n in held:
+                    raise ConsolidateError(f"{new!r}: the name {n!r} is defined in more than one of its modules")
+            held += names
+            pieces += [t for t, _ in body]
+        graph[new] = set(imports.internal) - {new}
+        header = imports.render(package, new)
+        writes[f"{package}/{new}.py"] = (header + "\n\n\n" if header else "") + "\n\n\n".join(pieces) + "\n"
+        summary.append((new, list(olds), held))
+        deletes += [f"{package}/{old}.py" for old in olds if old != new]
+    cycle = _find_cycle(graph)
+    if cycle:
+        raise ConsolidateError("these new modules would import each other in a circle: " + " -> ".join(cycle) +
+                               ". Move modules between the groups so that imports only go one way.")
+    # tests: one file per group; names that repeat across the merged files get the old module name in them
+    for new, olds in groups.items():
+        have = [o for o in olds if o in tests]
+        if not have:
+            continue
+        imports = _Imports()
+        parsed: list[tuple[str, list[tuple[str, str]]]] = []
+        for old in have:
+            body, _ = _split_module(tests[old], package, owner, imports, "", tidy=False, label=f"tests/test_{old}.py")
+            parsed.append((old, body))
+        count: dict[str, int] = {}
+        for _, body in parsed:
+            for _, name in body:
+                count[name] = count.get(name, 0) + 1
+        out_pieces: list[str] = []
+        seen_names: set[str] = set()
+        for old, body in parsed:
+            for text, name in body:
+                if name and count[name] > 1 and name.startswith("test"):
+                    new_name = "test_" + old + "_" + name[len("test_"):] if name.startswith("test_") else f"test_{old}_{name}"
+                    text = re.sub(rf"\bdef {re.escape(name)}\(", f"def {new_name}(", text, count=1)
+                    name = new_name
+                if name and name in seen_names:
+                    raise ConsolidateError(f"tests/test_{new}.py: the name {name!r} would exist twice")
+                seen_names.add(name)
+                out_pieces.append(text)
+        header = imports.render(package, "")
+        writes[f"tests/test_{new}.py"] = (header + "\n\n\n" if header else "") + "\n\n\n".join(out_pieces) + "\n"
+        deletes += [f"tests/test_{old}.py" for old in have if old != new]
+    # __init__: the same names, now exported from the new modules
+    init_lines: list[str] = []
+    exports: dict[str, list[str]] = {}
+    for line in (init_text or "").splitlines():
+        m = re.match(rf"^from (?:\.|{re.escape(package)}\.)(\w+) import (.+)$", line.strip())
+        if m and m.group(1) in owner:
+            exports.setdefault(owner[m.group(1)], [])
+            exports[owner[m.group(1)]] += [n.strip() for n in m.group(2).strip("() ").split(",") if n.strip()]
+        elif line.strip():
+            init_lines.append(line)
+    for new in groups:
+        names = list(dict.fromkeys(exports.get(new, [])))
+        if names:
+            init_lines.append(_Imports._from_line(f".{new}", names))
+    writes[f"{package}/__init__.py"] = "\n".join(init_lines) + "\n"
+    untouched = sorted(m for m in modules if m not in owner and m != "__init__")
+    return Consolidation(writes, [d for d in dict.fromkeys(deletes) if d not in writes], summary, untouched)
+
+
+def _pytest_passed(root: Path) -> tuple[int, int, str]:
+    """(passed, failed+errors, last output line) of `python -m pytest -q` in `root`."""
+    try:
+        p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=str(root),
+                           capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        raise ConsolidateError(f"could not run the tests: {e}") from e
+    last = (p.stdout.strip().splitlines() or [""])[-1]
+    passed = int((re.search(r"(\d+) passed", last) or [0, 0])[1])
+    bad = sum(int(x) for x in re.findall(r"(\d+) (?:failed|error)", last))
+    return passed, bad if p.returncode else 0, last
+
+
+def cmd_consolidate(args, out, **_):
+    if args.suggest:
+        plans = [load_plan(p) for p in args.suggest]
+        out(json.dumps(suggest_groups(plans), indent=2))
+        return EXIT_OK
+    if not args.groups or not args.workspace:
+        out("usage: codeagent consolidate GROUPS.json --workspace DIR   (or: --suggest PLAN.json [PLAN.json ...])")
+        return EXIT_USAGE
+    package, groups = load_groups(args.groups)
+    ws = Workspace(Path(args.workspace).expanduser(), Config().max_file_bytes)
+    pkg_dir = ws.root / package
+    if not pkg_dir.is_dir():
+        raise ConsolidateError(f"{pkg_dir} is not a directory")
+    modules = {f.stem: f.read_text(encoding="utf-8") for f in sorted(pkg_dir.glob("*.py")) if f.stem != "__init__"}
+    tests = {}
+    for old in (o for olds in groups.values() for o in olds):
+        t = ws.root / "tests" / f"test_{old}.py"
+        if t.is_file():
+            tests[old] = t.read_text(encoding="utf-8")
+    init_path = pkg_dir / "__init__.py"
+    result = consolidate_sources(package, groups, modules, tests,
+                                 init_path.read_text(encoding="utf-8") if init_path.is_file() else None, tidy=not args.no_tidy)
+    out(f"consolidate: {package}")
+    for new, olds, names in result.summary:
+        out(f"  {new}.py  <-  {', '.join(olds)}   ({len(names)} name{'s' if len(names) != 1 else ''})")
+    if result.untouched:
+        out(f"  left as they are: {', '.join(result.untouched)}")
+    n_before = sum(len(o) for o in groups.values())
+    out(f"  modules {n_before} -> {len(groups)}")
+    if args.dry_run:
+        out("[dry run] nothing was written")
+        return EXIT_OK
+    if (ws.root / ".git").exists() and not args.no_commit:
+        if _run(ws.root, "status", "--porcelain"):
+            raise ConsolidateError("the workspace has uncommitted changes; commit or stash them first (or use --no-commit)")
+    before_passed, before_bad, before_line = _pytest_passed(ws.root)
+    if before_bad or before_passed == 0:
+        raise ConsolidateError(f"the tests do not pass before consolidating ({before_line}); fix that first")
+    touched = [*result.writes, *result.deletes]
+    snapshot = ws.snapshot(touched)
+    try:
+        for rel, content in result.writes.items():
+            ws.write(rel, content)
+        for rel in result.deletes:
+            ws.delete(rel)
+        after_passed, after_bad, after_line = _pytest_passed(ws.root)
+    except BaseException:
+        ws.restore(snapshot)
+        raise
+    if after_bad or after_passed != before_passed:
+        ws.restore(snapshot)
+        raise ConsolidateError(f"the tests changed after merging ({before_passed} passed before; now: {after_line}). "
+                               "Nothing was changed.")
+    out(f"  tests: {before_passed} passed before, {after_passed} passed after")
+    (ws.root / DIR).mkdir(exist_ok=True)
+    (ws.root / DIR / MARKER).write_text(json.dumps({"package": package, "modules": groups}, indent=2), encoding="utf-8")
+    if (ws.root / ".git").exists() and not args.no_commit:
+        short = commit_paths(ws.root, touched, f"refactor: consolidate {n_before} modules into {len(groups)}")
+        out(f"  committed {short} on branch {current_branch(ws.root)}   (undo: git reset --hard HEAD~1)")
+    out("done. Do not rerun the plans in this workspace; to rebuild, use a new workspace.")
+    return EXIT_OK
+
+
 def cmd_run(args, out, *, llm_factory, guard_factory, **_):
     cfg = load_config()
     plan = load_plan(args.plan)
@@ -2769,6 +3232,10 @@ def cmd_run(args, out, *, llm_factory, guard_factory, **_):
             out(f"  {i}. {s.title}  ->  {s.commit}")
         return EXIT_OK
 
+    if (ws_path / DIR / MARKER).exists():
+        out(f"{ws_path} was consolidated into fewer modules, so the plans' files no longer exist there and a rerun would "
+            f"rebuild everything. Use a new workspace (or delete {ws_path / DIR / MARKER} if you really want to rebuild here).")
+        return EXIT_USAGE
     ws = Workspace(ws_path, cfg.max_file_bytes)
     log, close = _make_log(out, ws.root / ".codeagent" / "agent.log")
     stopper = _Stopper()
@@ -2805,6 +3272,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("doctor", help="check model server, model, git and system resources")
     sp = sub.add_parser("smoke", help="test whether the model follows the output format")
     sp.add_argument("--tries", type=int, default=5)
+    sp = sub.add_parser("consolidate", help="merge the one-module-per-function files of a finished project into a few modules")
+    sp.add_argument("groups", nargs="?", help="groups.json: which old modules go into which new module")
+    sp.add_argument("--suggest", nargs="+", metavar="PLAN", help="print a starter groups.json (one module per plan) and exit")
+    sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--no-tidy", action="store_true", help="keep unused `x = f(...)` assignments as they are")
+    sp.add_argument("--no-commit", action="store_true", help="change the files but do not commit")
     sp = sub.add_parser("run", help="build a plan")
     sp.add_argument("plan"); sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--live", action="store_true",
@@ -2813,7 +3286,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"template": cmd_template, "check": cmd_check, "doctor": cmd_doctor,
-            "smoke": cmd_smoke, "run": cmd_run}
+            "smoke": cmd_smoke, "run": cmd_run, "consolidate": cmd_consolidate}
 
 
 def _silence_stdout() -> None:
@@ -2828,7 +3301,7 @@ def main(argv=None, *, llm_factory=make_client, guard_factory=None, out=print) -
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args, out, llm_factory=llm_factory, guard_factory=guard_factory)
-    except (ConfigError, PlanError) as e:
+    except (ConfigError, PlanError, ConsolidateError, GitError, WorkspaceError) as e:
         out(f"error: {e}")
         return EXIT_USAGE
     except BrokenPipeError:                      # e.g. `codeagent template | head`
