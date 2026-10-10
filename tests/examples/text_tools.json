@@ -1,0 +1,214 @@
+{
+  "title": "Text Tools",
+  "test_command": "python -m pytest -q",
+  "steps": [
+    {
+      "title": "count_words counts words separated by spaces",
+      "description": "Create count_words(text) in texttools/words.py.\n1. return len(text.split())\n",
+      "commit": "feat: add count_words",
+      "tests": [
+        "tests/test_words.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/words.py"
+      ],
+      "function": "texttools.words:count_words",
+      "signature": "count_words(text)",
+      "examples": [
+        {
+          "args": [
+            "hello world"
+          ],
+          "expect": 2
+        },
+        {
+          "args": [
+            "  a  b  "
+          ],
+          "expect": 2
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expect": 0
+        }
+      ]
+    },
+    {
+      "title": "is_palindrome ignores case and punctuation",
+      "description": "Create is_palindrome(text) in texttools/palin.py.\n1. cleaned = \"\"\n2. For each ch in text.lower(): if ch.isalnum(): cleaned = cleaned + ch\n3. return cleaned == cleaned[::-1]\n",
+      "commit": "feat: add is_palindrome",
+      "tests": [
+        "tests/test_palin.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/palin.py"
+      ],
+      "function": "texttools.palin:is_palindrome",
+      "signature": "is_palindrome(text)",
+      "examples": [
+        {
+          "args": [
+            "Racecar"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "A man, a plan, a canal: Panama"
+          ],
+          "expect": true
+        },
+        {
+          "args": [
+            "hello"
+          ],
+          "expect": false
+        },
+        {
+          "args": [
+            ""
+          ],
+          "expect": true
+        }
+      ]
+    },
+    {
+      "title": "caesar_shift moves letters along the alphabet",
+      "description": "Create caesar_shift(text, shift) in texttools/caesar.py. Letters wrap around the alphabet; everything else stays as it is.\n1. result = \"\"\n2. For each ch in text:\n   - if ch.islower(): result = result + chr((ord(ch) - ord(\"a\") + shift) % 26 + ord(\"a\"))\n   - elif ch.isupper(): result = result + chr((ord(ch) - ord(\"A\") + shift) % 26 + ord(\"A\"))\n   - else: result = result + ch\n3. return result\n",
+      "commit": "feat: add caesar_shift",
+      "tests": [
+        "tests/test_caesar.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/caesar.py"
+      ],
+      "function": "texttools.caesar:caesar_shift",
+      "signature": "caesar_shift(text, shift)",
+      "examples": [
+        {
+          "args": [
+            "abc",
+            1
+          ],
+          "expect": "bcd"
+        },
+        {
+          "args": [
+            "xyz",
+            3
+          ],
+          "expect": "abc"
+        },
+        {
+          "args": [
+            "Hello, World!",
+            5
+          ],
+          "expect": "Mjqqt, Btwqi!"
+        },
+        {
+          "args": [
+            "abc",
+            -1
+          ],
+          "expect": "zab"
+        }
+      ]
+    },
+    {
+      "title": "most_common_word finds the word used most",
+      "description": "Create most_common_word(text) in texttools/common.py. Words are lowercase and split on spaces. If two words are used equally often, the one that appears first wins.\n1. If text.split() is empty, raise ValueError.\n2. counts = {} and order = []\n3. For each word in text.lower().split():\n   - if word not in counts: counts[word] = 0 and order.append(word)\n   - counts[word] = counts[word] + 1\n4. best = order[0]\n5. For each word in order: if counts[word] > counts[best]: best = word\n6. return best\n",
+      "commit": "feat: add most_common_word",
+      "tests": [
+        "tests/test_common.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/common.py"
+      ],
+      "function": "texttools.common:most_common_word",
+      "signature": "most_common_word(text)",
+      "examples": [
+        {
+          "args": [
+            "a b a"
+          ],
+          "expect": "a"
+        },
+        {
+          "args": [
+            "Hi hi there"
+          ],
+          "expect": "hi"
+        },
+        {
+          "args": [
+            "x y"
+          ],
+          "expect": "x"
+        },
+        {
+          "args": [
+            "b a a b"
+          ],
+          "expect": "b"
+        },
+        {
+          "args": [
+            ""
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    },
+    {
+      "title": "truncate shortens long text with three dots",
+      "description": "Create truncate(text, limit) in texttools/trunc.py.\n1. If limit is less than 3, raise ValueError.\n2. If len(text) <= limit, return text.\n3. return text[:limit - 3] + \"...\"\n",
+      "commit": "feat: add truncate",
+      "tests": [
+        "tests/test_trunc.py"
+      ],
+      "files": [
+        "texttools/__init__.py",
+        "texttools/trunc.py"
+      ],
+      "function": "texttools.trunc:truncate",
+      "signature": "truncate(text, limit)",
+      "examples": [
+        {
+          "args": [
+            "hello",
+            10
+          ],
+          "expect": "hello"
+        },
+        {
+          "args": [
+            "hello world",
+            8
+          ],
+          "expect": "hello..."
+        },
+        {
+          "args": [
+            "hello",
+            5
+          ],
+          "expect": "hello"
+        },
+        {
+          "args": [
+            "hello",
+            2
+          ],
+          "raises": "ValueError"
+        }
+      ]
+    }
+  ]
+}
