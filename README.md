@@ -127,7 +127,8 @@ with `CODEAGENT_LOOP_GUARD=false`. Whatever streamed in before a stop is still s
 Writing a function body does **not** think by default (`CODEAGENT_THINK_BODY=false`, with
 `CODEAGENT_TEMPERATURE_NO_THINK=0.3`): in a real run a 0.8B model spent 4-5 minutes wandering in its thinking
 for a 5-line body, while the same call without thinking answered in 8 seconds. Set `CODEAGENT_THINK_BODY=true`
-to bring thinking back. The harness also writes the `from pkg.mod import name` lines for every context function
+to bring thinking back. A body that still fails without thinking is retried with thinking from attempt
+`CODEAGENT_THINK_BODY_AFTER` (default 4; 0 = never), still bounded by `CODEAGENT_MAX_THINK_CHARS`. The harness also writes the `from pkg.mod import name` lines for every context function
 named in the step description, and always puts the planned signature back if the model rewrote the def line.
 
 Files the step description names (like "use check_args from cart/checks.py") are shown to the model and imported

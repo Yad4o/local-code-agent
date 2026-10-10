@@ -48,7 +48,7 @@
     },
     {
       "title": "merge_quantity raises the quantity of one item",
-      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. Start with an empty list called result.\n2. For each item in cart: if item[\"name\"] equals name, append a copy of the item whose quantity is\n   item[\"quantity\"] + quantity; otherwise append the item unchanged.\n3. Return result.\n",
+      "description": "Create merge_quantity(cart, name, quantity) in cart/merge.py. cart is a list of dicts {\"name\", \"price\", \"quantity\"}.\nReturn a NEW list; never change the input cart.\n1. result = []\n2. For each item in cart:\n   - if item[\"name\"] == name: new_item = dict(item); new_item[\"quantity\"] = item[\"quantity\"] + quantity; result.append(new_item)\n   - else: result.append(item)\n3. return result\n",
       "commit": "feat: add cart merge_quantity",
       "tests": [
         "tests/test_merge.py"

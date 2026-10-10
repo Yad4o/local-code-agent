@@ -100,6 +100,23 @@ def test_think_body_true_keeps_thinking_for_the_first_attempt(tmp_path, cfg):  #
     assert "think" not in llm.kwargs[0] and llm.kwargs[1]["think"] is False
 
 
+def test_a_body_that_keeps_failing_is_retried_with_thinking_from_attempt_think_body_after(tmp_path, cfg):  # noqa: F811
+    from tests.test_runner import BODY_BAD, BODY_OK
+    cfg.think_body_after = 3
+    bad2 = BODY_BAD.replace("return text", "return text.lower()")
+    llm = FakeLLM(BODY_BAD, bad2, BODY_OK)
+    make_body_runner(tmp_path, llm, cfg)[0].run()
+    assert [k.get("think") for k in llm.kwargs[:3]] == [False, False, None]
+
+
+def test_think_body_after_zero_never_turns_thinking_back_on(tmp_path, cfg):  # noqa: F811
+    from tests.test_runner import BODY_BAD, BODY_OK
+    cfg.think_body_after = 0
+    llm = FakeLLM(BODY_BAD, BODY_BAD.replace("return text", "return text.lower()"), BODY_OK)
+    make_body_runner(tmp_path, llm, cfg)[0].run()
+    assert [k.get("think") for k in llm.kwargs[:3]] == [False, False, False]
+
+
 def test_a_body_that_relies_on_a_context_function_passes_without_writing_the_import(tmp_path, cfg):  # noqa: F811
     import json
 
