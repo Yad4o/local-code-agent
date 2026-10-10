@@ -92,6 +92,7 @@ def test_no_answer_is_still_an_llm_error():
 # --- the runner treats a looping/empty attempt as a failed attempt, not a pause --
 
 def test_looping_attempt_is_retried_without_thinking_and_with_feedback(tmp_path, cfg):  # noqa: F811
+    cfg.think_body = True                                    # first attempt thinks, so it can loop
     llm = FakeLLM(NoAnswer("the model got stuck repeating itself while thinking and was stopped"), BODY_OK)
     r, _ = make_body_runner(tmp_path, llm, cfg)
     assert r.run().outcome == "done"
