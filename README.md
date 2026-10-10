@@ -247,7 +247,8 @@ AI assistant, then tell it what you want built, and it writes the plan JSON for 
 More example plans: `tests/examples/cart_totals.json` (steps that call earlier steps), `text_tools.json`
 (strings, loops, a hard step split in two), `gradebook.json` (branch chains, dict input, errors). Run any of them with
 `codeagent run tests/examples/<name>.json --workspace ~/agent-projects/<name> --live`.
-`codeagent check plan.json` also prints `warning:` lines for description lines a small model copies wrongly (two
+After a failed attempt the model is told which code lines of the recipe its body is missing (compared as Python,
+not as text), which is why recipe lines should be exact Python. `codeagent check plan.json` also prints `warning:` lines for description lines a small model copies wrongly (two
 assignments joined with `and`, a loop and its body on one line, `;`-joined statements, English conditions, recipes
 longer than 6 lines or with two loops); fix them before running.
 

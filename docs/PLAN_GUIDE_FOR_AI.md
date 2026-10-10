@@ -36,6 +36,8 @@ wrong guess would waste the whole plan.
   understandable on its own.
 * The harness writes the `def` line (from `signature`) and the imports of earlier functions. The model writes only
   the body.
+* After a failed attempt the harness compares the recipe's **Python lines** with the model's body and tells it which
+  of them are missing ("copy them as they are"). So every recipe line should be exact, valid Python.
 * The model gets 6 attempts. If it fails, the step is rolled back and the whole run stops. Later steps do not run.
 * The agent works on a git branch `agent/<plan title>` and never touches `main`.
 
@@ -165,6 +167,13 @@ Rules:
   verbatim into the code and failed all 6 attempts: write `best_name = None` and `best_avg = None` as two lines. Branches are `- if ...:` and `- else:` bullets; an `if` that
   needs two statements gets one nested `-` bullet per statement.
 * Put error checks first, in the order the examples test them.
+* **Never reassign a parameter.** Give the cleaned value a new name. `1. category = category.strip().lower()` then
+  `2. if category == "": raise ValueError` failed all 6 attempts: the model folded step 1 into the return and checked
+  the untrimmed text. `1. cleaned = category.strip().lower()`, `2. if cleaned == "": raise ValueError`,
+  `3. return cleaned` leaves nothing to fold.
+* **Assign the result of a helper call even when you only want its error**: `found = find_transaction(transactions,
+  transaction_id)`, not a bare `find_transaction(...)` line. A line whose value is never used looks optional to a
+  small model, and it drops the line (it dropped `raise KeyError` checks twice).
 * **Write checks and early returns as code, not English.** `2. if len(text) <= limit: return text` is followed;
   `2. If the text already fits, return it.` was skipped on all 6 attempts (the model kept the other two lines and
   dropped that one). Use real conditions (`if len(scores) == 0: raise ValueError`), one short statement after the colon.
@@ -422,6 +431,7 @@ Go through every step and answer yes to each:
 - [ ] Every branch and every `raises` has an example; each expected value was checked by hand.
 - [ ] No `null`, tuple, set or inexact float anywhere in the examples.
 - [ ] The body is at most about 8 lines, with at most one loop; the recipe has at most 6 numbered lines.
+- [ ] No recipe line reassigns a parameter, and every helper call whose value is unused is assigned to a variable.
 - [ ] Every loop is on its own line with its statements as bullets underneath; no `and`/`;` joining statements.
 - [ ] Titles and commits are unique/valid; commit lines are at most 72 characters.
 - [ ] Everything that is not a pure function is listed under "Hand-written parts".

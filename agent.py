@@ -116,6 +116,69 @@ def _is_bare_code(text: str) -> bool:
     return True
 
 
+def _recipe_requirements(description: str) -> list[tuple[str, str]]:
+    """(source line, ast key) for every numbered/bulleted description line that is a Python statement,
+    one key per statement the line asks for (an `if` asks for its test and for each statement in its one-line body)."""
+    out: list[tuple[str, str]] = []
+    for raw in description.splitlines():
+        m = re.match(r"\s*(?:\d+[.)]|-)\s+(.*\S)\s*$", raw)
+        if not m:
+            continue
+        text = m.group(1).strip()
+        src = text + " pass" if text.endswith(":") else text
+        try:
+            nodes = ast.parse(src).body
+        except SyntaxError:
+            continue
+        if len(nodes) != 1:
+            continue
+        for key in _statement_keys(nodes[0]):
+            out.append((text, key))
+    return out
+
+
+def _statement_keys(node: ast.stmt) -> list[str]:
+    if isinstance(node, ast.If):
+        keys = ["test:" + ast.dump(node.test)]
+        for child in node.body:
+            if not isinstance(child, ast.Pass):
+                keys += _statement_keys(child)
+        return keys
+    if isinstance(node, ast.Expr):
+        return ["expr:" + ast.dump(node.value)]
+    return [ast.dump(node)]
+
+
+def missing_recipe_lines(description: str, body: str, limit: int = 3) -> list[str]:
+    """Recipe lines (code the description asks for) that the body does not contain, in recipe order.
+    A tiny model often drops or rewrites one line; naming it is the most useful thing to tell it."""
+    try:
+        tree = ast.parse(textwrap.dedent(body))
+    except SyntaxError:
+        return []
+    have: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            have.add("test:" + ast.dump(node.test))
+        if isinstance(node, ast.Expr):
+            have.add("expr:" + ast.dump(node.value))
+        if isinstance(node, ast.stmt):
+            have.add(ast.dump(node))
+    missing: list[str] = []
+    for text, key in _recipe_requirements(description):
+        if key not in have and text not in missing:
+            missing.append(text)
+    return missing[:limit]
+
+
+def _missing_lines_note(description: str, body: str) -> str | None:
+    lines = missing_recipe_lines(description, body)
+    if not lines:
+        return None
+    return ("these lines from the numbered steps are missing from your body; the steps must be followed exactly, "
+            "so write them as they are:\n" + "\n".join(f"    {l}" for l in lines))
+
+
 def parse_file_blocks(text: str, *, truncated: bool = False) -> ParseResult:
     """`truncated=True` means the model hit its token limit, so an unclosed block was CUT OFF
     (repair it if it is Python). Otherwise an unclosed block just means it forgot the fence."""
@@ -2279,6 +2342,9 @@ class Runner:
                 fresh = True
                 feedback = (f"this is identical to your attempt {seen[key]}, which already failed the tests. "
                             f"Write a DIFFERENT solution; do not copy your earlier code.")
+                if step.signature:
+                    note = _missing_lines_note(step.description, function_body(files[module_path(step)], _function_name(step)) or "")
+                    feedback += "\nAlso: " + note if note else ""
                 self.log(f"   impl attempt {n}: same code as attempt {seen[key]}; not re-running, asking for a different one")
                 continue
             seen[key] = n
@@ -2297,6 +2363,8 @@ class Runner:
             if broken:
                 raise _TestsBroken(broken)
             output = res.output
+            if step.signature:                           # name the recipe lines the body left out or rewrote
+                feedback = _missing_lines_note(step.description, function_body(files[module_path(step)], _function_name(step)) or "")
             self.log(f"   impl attempt {n}: tests still failing")
         tail = output.strip().splitlines()[-1] if output.strip() else ""
         raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
