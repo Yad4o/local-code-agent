@@ -4,7 +4,7 @@
   "steps": [
     {
       "title": "average returns the mean of a list of scores",
-      "description": "Create average(scores) in gradebook/average.py. scores is a list of numbers.\n1. If scores is empty, raise ValueError.\n2. total = 0\n3. For each s in scores:\n   - total = total + s\n4. return total / len(scores)\n",
+      "description": "Create average(scores) in gradebook/average.py. scores is a list of numbers.\n1. if len(scores) == 0: raise ValueError\n2. total = 0\n3. For each s in scores:\n   - total = total + s\n4. return total / len(scores)\n",
       "commit": "feat: add average",
       "tests": [
         "tests/test_average.py"
@@ -44,7 +44,7 @@
     },
     {
       "title": "letter_grade turns a score into A, B, C, D or F",
-      "description": "Create letter_grade(score) in gradebook/letter.py.\n1. If score is less than 0 or more than 100, raise ValueError.\n2. If score >= 90, return \"A\".\n3. If score >= 80, return \"B\".\n4. If score >= 70, return \"C\".\n5. If score >= 60, return \"D\".\n6. return \"F\"\n",
+      "description": "Create letter_grade(score) in gradebook/letter.py.\n1. if score < 0 or score > 100: raise ValueError\n2. if score >= 90: return \"A\"\n3. if score >= 80: return \"B\"\n4. if score >= 70: return \"C\"\n5. if score >= 60: return \"D\"\n6. return \"F\"\n",
       "commit": "feat: add letter_grade",
       "tests": [
         "tests/test_letter.py"
@@ -108,7 +108,7 @@
     },
     {
       "title": "best_student finds the name with the highest average",
-      "description": "Create best_student(grades) in gradebook/best.py. Use average from gradebook/average.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores. If two students tie, the first one wins.\n1. If grades is empty, raise ValueError.\n2. best_name = None and best_avg = None\n3. For each name in grades:\n   - avg = average(grades[name])\n   - if best_avg is None or avg > best_avg:\n     - best_name = name\n     - best_avg = avg\n4. return best_name\n",
+      "description": "Create best_student(grades) in gradebook/best.py. Use average from gradebook/average.py (already written, shown below).\ngrades is a dict that maps a student name to a list of scores. If two students tie, the first one wins.\n1. if len(grades) == 0: raise ValueError\n2. best_name = None and best_avg = None\n3. For each name in grades:\n   - avg = average(grades[name])\n   - if best_avg is None or avg > best_avg:\n     - best_name = name\n     - best_avg = avg\n4. return best_name\n",
       "commit": "feat: add best_student",
       "tests": [
         "tests/test_best.py"

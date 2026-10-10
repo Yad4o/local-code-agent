@@ -180,7 +180,7 @@
     },
     {
       "title": "apply_discount takes a percentage off a total",
-      "description": "Create apply_discount(total, percent) in totals/discount.py.\n1. If percent is less than 0 or more than 100, raise ValueError.\n2. return total - total * percent / 100\n",
+      "description": "Create apply_discount(total, percent) in totals/discount.py.\n1. if percent < 0 or percent > 100: raise ValueError\n2. return total - total * percent / 100\n",
       "commit": "feat: add apply_discount",
       "tests": [
         "tests/test_discount.py"
