@@ -4,7 +4,8 @@
 
 1. Make a GitHub token: GitHub > Settings > Developer settings > Personal access tokens > **Tokens (classic)** >
    Generate new token, tick the **`repo`** box, copy it.
-2. In the terminal: `codeagent setup` and paste the token (nothing is shown while you type).
+2. In the terminal: `codeagent setup` and paste the token (nothing is shown while you type; it tells you how many
+   characters it received). If the paste does not work, use `codeagent setup --visible`, or Ctrl+Shift+V.
    It checks the token, saves it in `~/.codeagent.env` (only you can read it) and tells you which account it found.
 3. Check any time with `codeagent whoami`.
 

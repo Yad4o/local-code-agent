@@ -1140,7 +1140,7 @@ class GitHub:
         self.token, self.api_url, self.timeout = token, api_url.rstrip("/"), timeout
 
     def _scrub(self, text: str) -> str:
-        return text.replace(self.token, "***") if self.token else text
+        return text.replace(self.token, "***") if self.token and len(self.token) >= 8 else text
 
     def _call(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict, dict[str, str]]:
         req = urllib.request.Request(
@@ -4273,19 +4273,45 @@ def cmd_build(args, out, *, llm_factory, guard_factory, **_):
         close()
 
 
+TOKEN_SHAPE = re.compile(r"^(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})$")
+
+
+def clean_pasted_token(raw: str) -> str:
+    """What a terminal paste can add around a token: bracketed-paste escape codes, quotes, spaces, a `GITHUB_TOKEN=`
+    or `export ` in front."""
+    t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z~]", "", raw).replace("^[[200~", "").replace("^[[201~", "").strip()
+    t = re.sub(r"^(?:export\s+)?(?:GITHUB_TOKEN|GH_TOKEN)\s*=\s*", "", t)
+    return t.strip().strip("\"'").strip()
+
+
 def cmd_setup(args, out, **_):
     """Ask for the GitHub token once, check it, and save it in a private file (mode 600)."""
     path = Path(args.env or Path.home() / ".codeagent.env").expanduser()
-    token = getpass.getpass("Paste your GitHub token (nothing is shown while you type): ").strip() \
-        if sys.stdin.isatty() else sys.stdin.readline().strip()
+    if args.visible:
+        raw = input("Paste your GitHub token (it will be visible): ")
+    elif sys.stdin.isatty():
+        raw = getpass.getpass("Paste your GitHub token (nothing is shown while you type, just paste and press Enter): ")
+    else:
+        raw = sys.stdin.readline()
+    token = clean_pasted_token(raw)
     if not token:
-        out("no token given")
+        out("no token received. Nothing was saved. Try again, or use: codeagent setup --visible")
         return EXIT_USAGE
+    out(f"received {len(token)} character{'s' if len(token) != 1 else ''}, starting with {token[:4]!r}")
+    if len(token) < 20:
+        out("That is far too short to be a GitHub token (they are about 40 characters and start with ghp_). "
+            "The paste did not reach the program. Nothing was saved. Try:\n"
+            "  - codeagent setup --visible        (you can see what arrives)\n"
+            "  - paste with Ctrl+Shift+V (not Ctrl+V) in the terminal, or right-click > Paste\n"
+            "  - or save it by hand:  nano ~/.codeagent.env   with one line  GITHUB_TOKEN=ghp_...  then  chmod 600 ~/.codeagent.env")
+        return EXIT_USAGE
+    if not TOKEN_SHAPE.match(token):
+        out("note: this does not look like a GitHub token (they start with ghp_ or github_pat_); checking it anyway")
     api = (os.environ.get("GITHUB_API_URL") or "https://api.github.com")
     try:
         me = GitHub(token, api).whoami()
     except GitHubError as e:
-        out(f"error: {e}".replace(token, "***"))
+        out(f"error: {e}")
         return EXIT_USAGE
     values = parse_dotenv(path.read_text(encoding="utf-8")) if path.is_file() else {}
     values["GITHUB_TOKEN"] = token
@@ -4393,6 +4419,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", help="project.json (default: ./project.json)"); sp.add_argument("--workspace")
     sp = sub.add_parser("setup", help="save your GitHub token once (asks for it, checks it, saves it in ~/.codeagent.env)")
     sp.add_argument("--env", help="where to save it (default: ~/.codeagent.env)")
+    sp.add_argument("--visible", action="store_true", help="show the token while you paste it (if the hidden prompt does not work)")
     sp = sub.add_parser("whoami", help="show which GitHub account and commit identity are used")
     sp.add_argument("--env")
     sp = sub.add_parser("run", help="build a plan")
