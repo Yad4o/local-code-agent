@@ -51,6 +51,6 @@ def test_every_example_plan_is_free_of_lint_warnings(path):
 
 def test_every_plan_in_the_ai_guide_is_free_of_lint_warnings():
     md = (ROOT.parent / "docs" / "PLAN_GUIDE_FOR_AI.md").read_text(encoding="utf-8")
-    for block in re.findall(r"```json\n(.*?)```", md, re.S):
+    for block in (b for b in re.findall(r"```json\n(.*?)```", md, re.S) if '"steps"' in b):
         for step in parse_plan(block).steps:
             assert lint_description(step.description) == [], step.title

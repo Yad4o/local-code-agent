@@ -94,7 +94,7 @@ def isolated_git(tmp_path_factory, monkeypatch):
 
 @pytest.fixture
 def cfg():
-    return Config(step_cooldown_s=0, max_attempts=3, test_timeout=60)
+    return Config(step_cooldown_s=0, max_attempts=3, test_timeout=60, rescue=False)   # the old behaviour; rescue has its own tests
 
 
 def make_runner(tmp_path, llm, cfg, *, two=False, guard=None, sleep=None, stop=None, log=None, **plan_kw):

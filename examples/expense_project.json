@@ -1,0 +1,10 @@
+{
+  "name": "expense-manager",
+  "description": "Expense tracking core library: validation, records, filters, reports, budgets and formatting.",
+  "plans": [
+    "../tests/examples/expense_core.json",
+    "../tests/examples/expense_reports.json",
+    "../tests/examples/expense_editing.json"
+  ],
+  "groups": "expense_groups.json"
+}

@@ -17,9 +17,12 @@ Reply with exactly these parts, in this order, and nothing else:
    one-line purpose each, in build order.
 2. **The plan JSON**, in one ```json code block. If the project needs more than 15 steps, deliver it as several
    plans (see section 9), each in its own code block with a file name like `plan-1-core.json`.
-3. **Hand-written parts.** Everything that cannot be a step (section 4): one line per file, saying what it does and
+3. **`project.json`**: the one file the user builds from (format in section 9a).
+4. **`groups.json`**: how the one-module-per-function files are merged into a few themed modules afterwards
+   (format in section 9a).
+5. **Hand-written parts.** Everything that cannot be a step (section 4): one line per file, saying what it does and
    which agent-built functions it calls. Do not write that code unless the user asks for it.
-4. **Commands to run**, copied from section 10 with the real file names filled in.
+6. **Commands to run**, copied from section 10 with the real file names filled in.
 
 If the request is vague, make sensible choices and state them in the architecture part. Ask a question only when a
 wrong guess would waste the whole plan.
@@ -38,8 +41,12 @@ wrong guess would waste the whole plan.
   the body.
 * After a failed attempt the harness compares the recipe's **Python lines** with the model's body and tells it which
   of them are missing ("copy them as they are"). So every recipe line should be exact, valid Python.
-* The model gets 6 attempts. If it fails, the step is rolled back and the whole run stops. Later steps do not run.
-* The agent works on a git branch `agent/<plan title>` and never touches `main`.
+* The model gets 6 attempts. If it fails, the agent tries **your recipe lines as code** (when every line is valid
+  Python the function is built from the recipe itself), then a different "repair this draft" prompt. Only then is the
+  step parked: the run goes on with the steps that do not need it and the failure is written to a report (section 12).
+  So the safest recipe is one whose every line is valid Python.
+* With `codeagent build` the agent works on one branch `agent/<project>`, commits every step as the user, pushes to a
+  private GitHub repo, and fast-forwards `main` only when everything is built and merged. It never commits secrets.
 
 ---
 
@@ -406,24 +413,62 @@ steps), `tests/examples/text_tools.json` (strings, loops, a split of a hard step
 
 ---
 
+## 9a. project.json and groups.json
+
+`project.json` (the file the user builds from; paths are relative to it):
+
+```json
+{
+  "name": "expense-manager",
+  "description": "One sentence about what the project is.",
+  "plans": ["plan-1-core.json", "plan-2-reports.json"],
+  "groups": "groups.json"
+}
+```
+
+* `name` becomes the private GitHub repository: lower case, words joined with dashes, short and descriptive.
+* `plans` lists the plan files in build order. Only these keys are allowed (and an optional `"workspace"`; leave it out).
+
+`groups.json` merges the many small modules into a few themed ones after the build:
+
+```json
+{
+  "package": "expense_manager",
+  "modules": {
+    "validation": ["amounts", "categories", "dates"],
+    "records": ["make", "ids", "find"],
+    "reports": ["sum_amount", "monthly_summary"]
+  }
+}
+```
+
+* `package` is the package name used in every step's `function`. The lists hold the **module** names (the part
+  between the dots in `function`: `expense_manager.amounts:validate_amount` is module `amounts`).
+* Every module of every plan goes into exactly one group. Aim for 3-8 groups with themed names.
+* **Imports must only go one way.** Order the groups from foundation to top; a module may only call functions from
+  its own group or from groups listed **before** it. If two groups would need each other, merge them.
+
+---
+
 ## 10. Commands the user will run
 
 ```bash
-codeagent check plan-1-core.json
-codeagent run plan-1-core.json --workspace ~/agent-projects/<project> --live
-# a plan that stops on a failed step: read ~/agent-projects/<project>/.codeagent/transcript.md, then rerun the same command
-# for the next plan, use the same workspace:
-codeagent run plan-2-rules.json --workspace ~/agent-projects/<project> --live
+codeagent setup                          # once: saves the GitHub token in ~/.codeagent.env (asks for it, hidden)
+codeagent check plan-1-core.json         # for each plan; fix every warning
+codeagent build project.json             # builds every plan, merges the modules, publishes to a private repo
 ```
 
-`codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly
-(joined statements, a loop and its body on one line, English conditions, recipes that are too long): fix every warning
-before running. Finished steps are skipped on a rerun.
+`codeagent build` does everything: it creates the private repository, builds the plans in order, rescues or parks
+failing steps instead of stopping, merges the modules with `groups.json`, then pushes the branch and `main`. A
+rerun continues where it stopped. `codeagent build project.json --no-github` builds locally only.
 
-When every plan is done, the user can merge the one-module-per-function files into a few themed modules:
-`codeagent consolidate --suggest plan-1.json plan-2.json > groups.json` (one module per plan), edit it if they like,
-then `codeagent consolidate groups.json --workspace ~/agent-projects/<project>`. Plans must only import from
-**earlier** plans (as in section 9), or the merged modules would import each other in a circle and it refuses. A step whose description or examples were edited runs again.
+`codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly (joined
+statements, a loop and its body on one line, English conditions, recipes that are too long): fix every warning
+before building. A step whose description or examples were edited runs again.
+
+If steps fail, `build` writes `FAILURES.md` and prints what to do: the user pastes that file into an AI chat, saves
+the answer as `fix.json`, runs `codeagent fix fix.json --workspace <folder>` and builds again. Section 12 says how
+to answer such a report.
 
 ---
 
@@ -443,4 +488,44 @@ Go through every step and answer yes to each:
 - [ ] No recipe line reassigns a parameter, and every helper call whose value is unused is assigned to a variable.
 - [ ] Every loop is on its own line with its statements as bullets underneath; no `and`/`;` joining statements.
 - [ ] Titles and commits are unique/valid; commit lines are at most 72 characters.
+- [ ] `project.json` lists every plan in build order; `groups.json` places every module in exactly one group, and
+      no group needs a function from a group listed after it.
 - [ ] Everything that is not a pure function is listed under "Hand-written parts".
+
+---
+
+## 12. When the user pastes a failure report (`FAILURES.md`) or a failing transcript
+
+Answer with **one JSON object, a fix pack, and nothing else**. The user saves it and runs `codeagent fix fix.json`.
+
+```json
+{
+  "fixes": [
+    {
+      "failure": "<the failure id from this file>",
+      "plan_step": {
+        "description": "the rewritten recipe (code-shaped lines, see the rules above)",
+        "examples": [ {"args": [1], "expect": 2} ]
+      },
+      "body": "optional: the exact function body, if you are sure of it",
+      "lessons": ["optional: one short rule the model must follow in every later step"],
+      "scope": "project"
+    }
+  ]
+}
+```
+Only these keys are allowed. `plan_step` may contain `description`, `examples`, `signature`, `context`, `commit` (never `title`);
+include only what changes. `body` is the function body only (no `def` line). `scope` is `project` (default) or `global`
+(the lesson then applies to every project). Reply with the JSON object and nothing else.
+
+How to choose what to put in it:
+
+* **Almost always rewrite `plan_step.description`** using the rules in sections 5-6 (and an `examples` list only when
+  an example was wrong). Look at what the model wrote in its last attempts: it usually dropped, merged or rewrote a
+  recipe line. Write that line so it cannot be misread (as code, on its own line, with a new variable name).
+* Keep the step's title; never rename it and never touch `function`, `files` or `tests`.
+* Use `body` only when you are certain of the exact function body; it is tried first on the next run and must still
+  pass the tests.
+* Add a `lesson` when the mistake could repeat in other steps ("Never reassign a parameter; use a new variable name.").
+  One short rule each, at most 5 per fix. Use `"scope": "global"` for rules that hold for every project.
+* Fix every failing step of the report in the same pack (one entry per failure id).

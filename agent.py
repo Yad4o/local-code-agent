@@ -6,9 +6,11 @@ next; the model only answers narrow questions.
 """
 import argparse
 import ast
-import copy
 import builtins
+import contextlib
+import copy
 import fcntl
+import getpass
 import hashlib
 import ipaddress
 import json
@@ -564,6 +566,9 @@ class Config:
                                                 # that thinks about a 5-line body wanders for minutes and answers worse)
     think_body_after: int = 0                   # a body that failed this many attempts WITHOUT thinking is tried with thinking
                                                 # (still bounded by max_think_chars); 0 = never
+    rescue: bool = True                         # when the attempts run out: try the recipe as code, then a repair prompt
+    rescue_attempts: int = 3                    # model calls for the repair prompt
+    max_lessons: int = 8                        # rules learned from fixes that are put into every body prompt
     context_view: str = "signatures"             # helper files in a body prompt: "signatures" (def lines only) or "full" code
     temperature_no_think: float = 0.3           # temperature for calls that run without thinking
     repeat_penalty: float = 1.1                 # Ollama: discourages the "same sentence forever" loops
@@ -862,8 +867,8 @@ class GitError(Exception):
     pass
 
 
-def _run(root: str | Path, *args: str, check: bool = True) -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+def _run(root: str | Path, *args: str, check: bool = True, env_extra: dict[str, str] | None = None) -> str:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", **(env_extra or {})}
     try:
         p = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
                            timeout=GIT_TIMEOUT, env=env, stdin=subprocess.DEVNULL)
@@ -908,8 +913,13 @@ def _has_identity(root: str | Path) -> bool:
         bool(_run(root, "config", "user.email", check=False))
 
 
-def commit_paths(root: str | Path, paths: list[str] | tuple[str, ...], message: str) -> str | None:
-    """Commit exactly `paths`. Returns the short hash, or None if nothing changed."""
+def commit_paths(root: str | Path, paths: list[str] | tuple[str, ...], message: str, *,
+                 literals: tuple[str, ...] = ()) -> str | None:
+    """Commit exactly `paths`. Returns the short hash, or None if nothing changed. Refuses to commit anything
+    that looks like a secret (a token, a private key, a .env file)."""
+    bad = scan_files(root, list(paths), literals)
+    if bad:
+        raise GitError("refusing to commit, this looks like a secret:\n  " + "\n  ".join(bad[:5]))
     _run(root, "add", "--", *paths)
     if not _run(root, "status", "--porcelain", "--", *paths):
         return None
@@ -918,6 +928,325 @@ def commit_paths(root: str | Path, paths: list[str] | tuple[str, ...], message: 
         cfg += ["-c", "user.name=codeagent", "-c", "user.email=codeagent@localhost"]
     _run(root, *cfg, "commit", "-q", "--no-verify", "-m", message, "--", *paths)
     return _run(root, "rev-parse", "--short", "HEAD")
+
+
+# ==========================================================================
+# secrets
+# `.env` loading (the token never goes into os.environ, so generated code and test runs cannot read it) and a
+# scanner that refuses to commit or push anything that looks like a secret.
+# ==========================================================================
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] in "\"'" and value.endswith(value[0]):
+            value = value[1:-1]
+        else:
+            value = re.sub(r"\s+#.*$", "", value).strip()
+        out[key] = value
+    return out
+
+
+@dataclass
+class Secrets:
+    values: dict[str, str] = field(default_factory=dict)
+    files: list[Path] = field(default_factory=list)          # the .env files that were read
+    warnings: list[str] = field(default_factory=list)
+
+    def get(self, *keys: str) -> str | None:
+        for k in keys:
+            if self.values.get(k):
+                return self.values[k]
+        return None
+
+    @property
+    def token(self) -> str | None:
+        return self.get("GITHUB_TOKEN", "GH_TOKEN")
+
+    def scrub(self, text: str) -> str:
+        """Never let the token appear in a log line or error message."""
+        tok = self.token
+        return text.replace(tok, "***") if tok and len(tok) >= 8 else text
+
+
+def load_secrets(explicit: str | Path | None = None, project_dir: str | Path | None = None,
+                 environ: dict[str, str] | None = None, home: Path | None = None) -> Secrets:
+    """Priority, high to low: the --env file, real environment variables, $CODEAGENT_ENV, a .env next to
+    project.json, a .env in the current folder, ~/.codeagent.env."""
+    environ = os.environ if environ is None else environ
+    home = home or Path.home()
+    s = Secrets()
+
+    def read(p: Path) -> None:
+        if not p.is_file():
+            return
+        try:
+            s.values.update(parse_dotenv(p.read_text(encoding="utf-8")))
+        except OSError:
+            return
+        if p not in s.files:
+            s.files.append(p)
+        try:
+            if os.name == "posix" and p.stat().st_mode & 0o077:
+                s.warnings.append(f"{p} can be read by other users; run: chmod 600 {p}")
+        except OSError:
+            pass
+
+    for p in [home / ".codeagent.env", Path.cwd() / ".env", *([Path(project_dir) / ".env"] if project_dir else [])]:
+        read(p)
+    if environ.get("CODEAGENT_ENV"):
+        read(Path(environ["CODEAGENT_ENV"]).expanduser())
+    for key in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_USER", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                "GITHUB_API_URL", "GITHUB_GIT_URL_TEMPLATE"):
+        if environ.get(key):
+            s.values[key] = environ[key]
+    if explicit:
+        read(Path(explicit).expanduser())
+    return s
+
+
+SECRET_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
+    ("GitHub token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b")),
+    ("GitHub fine-grained token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{40,}\b")),
+    ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("private key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("API key", re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{24,}\b")),
+]
+_HARDCODED = re.compile(r"""(?i)\b(?:api[_-]?key|secret|token|passwd|password)\b['"]?\s*[:=]\s*['"]([^'"\s]{20,})['"]""")
+BLOCKED_FILES = re.compile(
+    r"(?:^|/)(?:\.env(?:\.(?!example$|sample$|template$)[^/]*)?|[^/]+\.pem|[^/]+\.key|[^/]+\.p12|[^/]+\.pfx|"
+    r"id_(?:rsa|dsa|ecdsa|ed25519)|\.netrc|\.npmrc|\.pypirc|credentials\.json|service[-_]?account[^/]*\.json|"
+    r"secrets?\.(?:json|ya?ml|toml))$")
+SCAN_MAX_BYTES = 1_000_000
+
+
+def _mask(s: str) -> str:
+    return s[:4] + "…" if len(s) > 4 else "…"
+
+
+def scan_text(text: str, literals: tuple[str, ...] = ()) -> list[tuple[int, str]]:
+    """(line number, what it looks like) for every secret-looking thing in `text`."""
+    found: list[tuple[int, str]] = []
+    for no, line in enumerate(text.splitlines(), 1):
+        for kind, rx in SECRET_PATTERNS:
+            m = rx.search(line)
+            if m:
+                found.append((no, f"{kind} ({_mask(m.group(0))})"))
+        m = _HARDCODED.search(line)
+        if m and re.search(r"\d", m.group(1)) and re.search(r"[A-Za-z]", m.group(1)):
+            found.append((no, f"hard-coded secret ({_mask(m.group(1))})"))
+        for lit in literals:
+            if lit and len(lit) >= 8 and lit in line:
+                found.append((no, "your own token"))
+    return found
+
+
+def blocked_name(rel: str) -> bool:
+    return bool(BLOCKED_FILES.search(rel.replace("\\", "/")))
+
+
+def scan_files(root: str | Path, rels: list[str] | tuple[str, ...], literals: tuple[str, ...] = ()) -> list[str]:
+    """Problems with committing `rels` (paths under `root`); an empty list means they are safe."""
+    root = Path(root)
+    problems: list[str] = []
+    for rel in rels:
+        if blocked_name(rel):
+            problems.append(f"{rel}: a file that normally holds secrets ({'.env' if '.env' in rel else 'key/credentials'}); never committed")
+            continue
+        p = root / rel
+        try:
+            if not p.is_file() or p.stat().st_size > SCAN_MAX_BYTES:
+                continue
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        problems += [f"{rel}:{no}: looks like a secret: {what}" for no, what in scan_text(text, literals)]
+    return problems
+
+
+def scan_history(root: str | Path, literals: tuple[str, ...] = ()) -> list[str]:
+    """Scan every commit of every branch (added lines and file names), so a secret that was committed and
+    deleted again is still found before anything is pushed."""
+    problems: list[str] = []
+    names = _run(root, "log", "--all", "--name-only", "--format=", check=False).splitlines()
+    problems += [f"{n}: a file that normally holds secrets, found in the history" for n in sorted(set(names)) if n and blocked_name(n)]
+    patch = _run(root, "log", "--all", "-p", "--no-color", "--format=", check=False)
+    current = "?"
+    for line in patch.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+        elif line.startswith("+") and not line.startswith("+++"):
+            for _, what in scan_text(line[1:], literals):
+                msg = f"{current}: looks like a secret in the history: {what}"
+                if msg not in problems:
+                    problems.append(msg)
+    return problems
+
+
+GITIGNORE = """\
+# secrets: never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+.netrc
+.npmrc
+.pypirc
+credentials.json
+
+# build and tool output
+.codeagent/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+"""
+
+
+# ==========================================================================
+# github
+# Creates the private repo, sets the commit identity to YOUR GitHub account, and pushes with your token.
+# The token is only ever handed to git through a throw-away GIT_ASKPASS helper: it is never in a URL, a
+# remote, a command line, a log line or the process environment of the tests.
+# ==========================================================================
+
+class GitHubError(Exception):
+    pass
+
+
+class RepoExists(GitHubError):
+    pass
+
+
+class GitHub:
+    def __init__(self, token: str, api_url: str = "https://api.github.com", *, timeout: float = 30):
+        self.token, self.api_url, self.timeout = token, api_url.rstrip("/"), timeout
+
+    def _scrub(self, text: str) -> str:
+        return text.replace(self.token, "***") if self.token else text
+
+    def _call(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict, dict[str, str]]:
+        req = urllib.request.Request(
+            self.api_url + path, method=method, data=None if body is None else json.dumps(body).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "codeagent", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                raw, status, headers = r.read().decode("utf-8", "replace"), r.status, r.headers
+        except urllib.error.HTTPError as e:
+            raw, status, headers = e.read().decode("utf-8", "replace"), e.code, e.headers
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise GitHubError(f"cannot reach GitHub: {self._scrub(str(e))}") from e
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            data = {"message": raw[:200]}
+        return status, data if isinstance(data, dict) else {"items": data}, {k.lower(): v for k, v in (headers or {}).items()}
+
+    def whoami(self) -> dict:
+        status, data, headers = self._call("GET", "/user")
+        if status == 401:
+            raise GitHubError("GitHub rejected the token (401 bad credentials). Make a new token with the `repo` scope "
+                              "(GitHub > Settings > Developer settings > Personal access tokens) and run: codeagent setup")
+        if status != 200:
+            raise GitHubError(f"GitHub answered {status}: {self._scrub(str(data.get('message', '')))}")
+        login = data.get("login") or ""
+        return {"login": login, "id": data.get("id"), "name": data.get("name") or login,
+                "email": data.get("email") or f"{data.get('id')}+{login}@users.noreply.github.com",
+                "scopes": [s.strip() for s in headers.get("x-oauth-scopes", "").split(",") if s.strip()]}
+
+    def create_repo(self, name: str, description: str = "") -> dict:
+        status, data, _ = self._call("POST", "/user/repos", {"name": name, "description": description[:340],
+                                                              "private": True, "auto_init": False})
+        if status == 201:
+            if data.get("private") is not True:
+                raise GitHubError("GitHub did not create a PRIVATE repository, so nothing will be pushed to it. "
+                                  "Delete that repository on github.com and try again.")
+            return data
+        text = json.dumps(data)
+        if status == 422 and "already exists" in text:
+            raise RepoExists(name)
+        if status in (401, 403):
+            raise GitHubError(f"GitHub refused to create the repository ({status}). The token needs the `repo` scope "
+                              f"(a classic token), then run: codeagent setup")
+        raise GitHubError(f"GitHub could not create the repository ({status}): {self._scrub(str(data.get('message', '')))}")
+
+    def create_unique_repo(self, name: str, description: str = "", tries: int = 6) -> dict:
+        """Create a PRIVATE repo; if the name is taken use name-2, name-3 ... (never touches an existing repo)."""
+        for n in range(1, tries + 1):
+            candidate = name if n == 1 else f"{name}-{n}"
+            try:
+                return self.create_repo(candidate, description)
+            except RepoExists:
+                continue
+        raise GitHubError(f"the repository names {name}, {name}-2 ... {name}-{tries} all exist already; "
+                          f"set another \"name\" in project.json")
+
+
+def repo_name(project_name: str) -> str:
+    """A good GitHub repository name: lower case, words joined with dashes."""
+    slug = re.sub(r"[^a-z0-9._]+", "-", project_name.strip().lower()).strip("-._")
+    return (slug or "project")[:90]
+
+
+def set_identity(root: str | Path, name: str, email: str) -> None:
+    """Commits in this repository are made as YOU (local config only; your global git config is left alone)."""
+    _run(root, "config", "user.name", name)
+    _run(root, "config", "user.email", email)
+    _run(root, "config", "commit.gpgsign", "false")
+
+
+def remote_url(secrets: Secrets, owner: str, repo: str) -> str:
+    template = secrets.get("GITHUB_GIT_URL_TEMPLATE") or "https://github.com/{owner}/{repo}.git"
+    return template.format(owner=owner, repo=repo)
+
+
+@contextlib.contextmanager
+def _askpass_env(user: str, token: str):
+    d = Path(tempfile.mkdtemp(prefix="codeagent-askpass-"))
+    try:
+        script = d / "askpass.sh"
+        script.write_text('#!/bin/sh\ncase "$1" in\n  *sername*) printf "%s\\n" "$CODEAGENT_PUSH_USER" ;;\n'
+                          '  *) printf "%s\\n" "$CODEAGENT_PUSH_TOKEN" ;;\nesac\n', encoding="utf-8")
+        script.chmod(0o700)
+        yield {"GIT_ASKPASS": str(script), "GIT_TERMINAL_PROMPT": "0", "CODEAGENT_PUSH_USER": user,
+               "CODEAGENT_PUSH_TOKEN": token}
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def push_ref(root: str | Path, url: str, branch: str, secrets: Secrets, user: str) -> None:
+    """Push `branch` to `url` as YOU. Never forces; stored git credentials are ignored on purpose."""
+    try:
+        with _askpass_env(user, secrets.token or "") as env:
+            _run(root, "-c", "credential.helper=", "push", url, f"refs/heads/{branch}:refs/heads/{branch}", env_extra=env)
+    except GitError as e:
+        raise GitError(secrets.scrub(str(e))) from None
+
+
+def preflight_push(root: str | Path, literals: tuple[str, ...] = ()) -> None:
+    """Refuse to push a history that contains anything that looks like a secret."""
+    bad = scan_history(root, literals)
+    if bad:
+        raise GitError("not pushing: the history contains secrets:\n  " + "\n  ".join(bad[:8]) +
+                       "\nRemove them from the history first, then run the command again.")
 
 
 # ==========================================================================
@@ -1968,12 +2297,10 @@ def signature_view(source: str) -> str | None:
     return "\n\n".join(blocks) or None
 
 
-def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
-                      budget: int, test_output: str | None, feedback: str | None,
-                      context_view: str = "signatures") -> list[dict]:
-    """Skeleton mode: the model sees the task, the def line, the examples, how its last body failed, and
-    what the tests said. Never the pytest file, the package __init__, or a whole module with a def line."""
-    path, name = module_path(step), _function_name(step)
+def _body_task_parts(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
+                     budget: int, context_view: str) -> list[str]:
+    """What every body prompt starts with: the task, the def line, the examples, callable helpers."""
+    name = _function_name(step)
     parts = [_header(plan, step),
              f"The function line is already written. Write ONLY its body:\n\ndef {step.signature}:\n    ..."]
     if step.examples:
@@ -1993,6 +2320,20 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
     ready = [ln.rsplit(" import ", 1)[1] for ln in context_imports(step, existing)]
     if ready:
         parts.append("Already imported for you: " + ", ".join(ready) + ". Do not write imports for them.")
+    return parts
+
+
+def _lessons_part(lessons: tuple[str, ...] | list[str]) -> str | None:
+    return ("Rules learned from earlier mistakes (follow them):\n" + "\n".join(f"- {l}" for l in lessons)) if lessons else None
+
+
+def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
+                      budget: int, test_output: str | None, feedback: str | None,
+                      context_view: str = "signatures", lessons: tuple[str, ...] | list[str] = ()) -> list[dict]:
+    """Skeleton mode: the model sees the task, the def line, the examples, how its last body failed, and
+    what the tests said. Never the pytest file, the package __init__, or a whole module with a def line."""
+    path, name = module_path(step), _function_name(step)
+    parts = _body_task_parts(plan, step, tests, existing, budget, context_view)
     prev = function_body(existing.get(path) or "", name)
     if prev and prev.strip() != "pass":
         parts.append("Your previous body, which failed (do not repeat it):\n```python\n" + prev[:budget // 2] + "\n```")
@@ -2003,9 +2344,86 @@ def build_body_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: d
         parts.append("What the tests reported:\n" + _name_the_calls(condense_test_output(test_output), name, step.examples))
     if feedback:
         parts.append("Problem with your previous answer, fix it:\n" + feedback)
+    if _lessons_part(lessons):
+        parts.append(_lessons_part(lessons))
     parts.append("Reply with ONLY this, the body lines and nothing else (no def line, no docstring, "
                  f"no comments, no explanation):\nFILE: {path}\n```python\n<body lines>\n```")
     return [{"role": "system", "content": SYSTEM_BODY}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
+SYSTEM_RESCUE = ("You repair one small Python function. You get its numbered steps, a draft body and the report of "
+                 "the tests it fails. Rewrite the body so that every step is followed exactly as written and every example "
+                 "passes. Change as little as you can. Reply with ONLY the corrected body, in exactly this format and "
+                 "nothing else:\n\nFILE: path/to/file.py\n```python\n<body lines only>\n```")
+
+
+def build_rescue_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None], budget: int,
+                        draft: str, test_output: str | None, context_view: str = "signatures",
+                        lessons: tuple[str, ...] | list[str] = ()) -> list[dict]:
+    """The different prompt used when the normal attempts failed: not 'write it', but 'fix this draft'."""
+    path, name = module_path(step), _function_name(step)
+    parts = _body_task_parts(plan, step, tests, existing, budget, context_view)
+    parts.append("This draft body does not pass the tests yet:\n```python\n" + (draft or "pass")[:budget // 2] + "\n```")
+    if test_output:
+        parts.append("What the tests reported for the draft:\n" + _name_the_calls(condense_test_output(test_output), name, step.examples))
+    note = _missing_lines_note(step.description, draft or "")
+    if note:
+        parts.append("Also: " + note)
+    if _lessons_part(lessons):
+        parts.append(_lessons_part(lessons))
+    parts.append("Fix the draft. Keep every line of the numbered steps. Reply with ONLY the corrected body "
+                 f"(no def line, no comments, no explanation):\nFILE: {path}\n```python\n<body lines>\n```")
+    return [{"role": "system", "content": SYSTEM_RESCUE}, {"role": "user", "content": "\n\n".join(parts)}]
+
+
+_RECIPE_ROW = re.compile(r"^(\s*)(?:\d+[.)]|-)\s+(.*\S)\s*$")
+
+
+def compile_recipe(description: str) -> str | None:
+    """The numbered and bulleted lines of a description as a Python body, when EVERY one of them is already
+    code (`if x < 0: raise ValueError`, `For each item in cart:` ...). None as soon as one line is English."""
+    rows = [(len(m.group(1)), m.group(2).strip()) for m in map(_RECIPE_ROW.match, description.splitlines()) if m]
+    if not rows:
+        return None
+    stack: list[int] = []
+    lines: list[str] = []
+    for indent, text in rows:
+        while stack and stack[-1] >= indent:
+            stack.pop()
+        m = re.fullmatch(r"For each (\w+) in (.+):", text)
+        text = f"for {m.group(1)} in {m.group(2)}:" if m else text
+        lines.append("    " * len(stack) + text)
+        stack.append(indent)
+    body = "\n".join(lines)
+    try:
+        ast.parse("def _f():\n" + textwrap.indent(body, "    "))
+    except SyntaxError:
+        return None
+    return body
+
+
+def _slug_title(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:80] or "step"
+
+
+def global_lessons_path() -> Path:
+    return Path(os.environ.get("CODEAGENT_LESSONS") or Path.home() / ".config" / "codeagent" / "lessons.json")
+
+
+def load_lessons(root: str | Path, limit: int = 8) -> list[str]:
+    """Rules learned from `codeagent fix`: this project's and the global ones (project rules last = freshest)."""
+    out: list[str] = []
+    for path in (global_lessons_path(), Path(root) / DIR / "lessons.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        out += [l for l in data.get("lessons", []) if isinstance(l, str) and l.strip() and l not in out]
+    return out[-limit:] if limit else []
+
+
+def override_path(root: str | Path, step: Step) -> Path:
+    return Path(root) / DIR / "overrides" / f"{_slug_title(step.title)}.py"
 
 
 def _header(plan: Plan, step: Step) -> str:
@@ -2036,9 +2454,9 @@ def build_tests_prompt(plan: Plan, step: Step, existing: dict[str, str | None], 
 
 def build_impl_prompt(plan: Plan, step: Step, tests: dict[str, str], existing: dict[str, str | None],
                   budget: int, test_output: str | None, feedback: str | None,
-                  context_view: str = "signatures") -> list[dict]:
+                  context_view: str = "signatures", lessons: tuple[str, ...] | list[str] = ()) -> list[dict]:
     if step.signature:
-        return build_body_prompt(plan, step, tests, existing, budget, test_output, feedback, context_view)
+        return build_body_prompt(plan, step, tests, existing, budget, test_output, feedback, context_view, lessons)
     parts = [
         _header(plan, step),
         "These tests must pass. Do NOT change the tests:\n" + _fit(dict(tests), budget // 2),
@@ -2168,6 +2586,8 @@ class StepResult:
     attempts: int = 0
     reason: str = ""
     commit: str | None = None
+    via: str = ""                     # how a step that needed help got done: recipe | rescue prompt | your fix
+    detail: dict = field(default_factory=dict)       # for a failed step: the bodies tried, test output, notes
 
 
 @dataclass
@@ -2188,7 +2608,8 @@ class RunReport:
     def summary(self) -> str:
         lines = [f"Plan: {self.plan_title}  (branch {self.branch})  ->  {self.outcome.upper()}"]
         for r in self.results:
-            extra = f"commit {r.commit}, {r.attempts} model calls" if r.status == "done" else r.reason
+            extra = (f"commit {r.commit}, {r.attempts} model calls" + (f", rescued: {r.via}" if r.via else "")
+                     if r.status == "done" else r.reason)
             lines.append(f"  [{r.status}] {r.title}" + (f"  ({extra})" if extra else ""))
         return "\n".join(lines)
 
@@ -2201,7 +2622,8 @@ class Runner:
     def __init__(self, cfg: Config, plan: Plan, ws: Workspace, llm: LLMClient, *,
                  guard=None, run_cmd=run_command, log: Callable[[str], None] | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 should_stop: Callable[[], bool] = lambda: False, live: LivePrinter | None = None):
+                 should_stop: Callable[[], bool] = lambda: False, live: LivePrinter | None = None,
+                 branch: str | None = None, plan_path: str | Path | None = None):
         first = shlex.split(plan.test_command)[0]
         if first not in cfg.allowed_commands:
             raise PlanError(f"test_command {first!r} is not in allowed_commands {cfg.allowed_commands}")
@@ -2215,12 +2637,22 @@ class Runner:
         self.attempts = 0
         self.replies = ReplyLog(ws.root)
         self.transcript = Transcript(ws.root)
+        self.branch, self.plan_path = branch, (str(plan_path) if plan_path else None)
+        self.lessons = load_lessons(ws.root, cfg.max_lessons)
+        self._tried: list[str] = []          # bodies the model produced for the current step
+        self._notes: list[str] = []          # what went wrong, attempt by attempt
+        self._last_output = ""
+        self._via = ""
+
+    def _note(self, msg: str) -> None:
+        self._notes.append(msg)
+        self.log("   " + msg)
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunReport:
         with WorkspaceLock(self.ws.root):
             ensure_repo(self.ws.root)
-            branch = f"agent/{plan_slug(self.plan)}"
+            branch = self.branch or f"agent/{plan_slug(self.plan)}"
             checkout_branch(self.ws.root, branch)
             state = self.state = RunState(self.ws.root)
             report = RunReport(self.plan.title, branch)
@@ -2250,6 +2682,7 @@ class Runner:
         paths = (*step.tests, *step.files)
         snapshot = self.ws.snapshot(paths)
         self.attempts = 0
+        self._tried, self._notes, self._last_output, self._via = [], [], "", ""
         try:
             feedback = None
             for rewrite in range(self.cfg.max_test_rewrites + 1):
@@ -2271,13 +2704,14 @@ class Runner:
             self._write(tests)                             # tests are exactly what we approved
             sha = commit_paths(self.ws.root, paths, step.commit)
             self.state.mark_done(self.plan, step, sha)
-            return StepResult(step.title, "done", self.attempts, commit=sha)
+            return StepResult(step.title, "done", self.attempts, commit=sha, via=self._via)
         except _Pause as p:
             self.ws.restore(snapshot)
             return StepResult(step.title, "paused", self.attempts, reason=str(p))
         except (_Fail, GitError, WorkspaceError) as e:
             self.ws.restore(snapshot)
-            return StepResult(step.title, "failed", self.attempts, reason=str(e))
+            return StepResult(step.title, "failed", self.attempts, reason=str(e),
+                              detail={"bodies": self._tried[-3:], "output": self._last_output, "notes": self._notes[-8:]})
 
     def _spec_tests_phase(self, step: Step):
         """The plan's examples ARE the tests: printed by the harness, never written by the model."""
@@ -2343,13 +2777,22 @@ class Runner:
             output, satisfied = self._reset_skeleton(step, tests, output)
             if satisfied:
                 return
+            override = override_path(self.ws.root, step)
+            if override.is_file():                      # a body supplied through `codeagent fix`
+                ok, out, _ = self._try_reply(step, tests, f"FILE: {module_path(step)}\n```python\n{override.read_text(encoding='utf-8')}\n```")
+                if ok:
+                    self._via = "your fix"
+                    return
+                self._note("the body from your fix did not pass the tests; trying the normal way")
+                output, satisfied = self._reset_skeleton(step, tests, output)
         for n in range(1, self.cfg.max_attempts + 1):
             existing = self._read_many((*step.files, *step_context(step)))
             if fresh:                                    # hide only the model's own old code, never the related files
                 existing.update({p: None for p in step.files})
 
             text = self._ask(build_impl_prompt(self.plan, step, tests, existing,
-                                               self.cfg.max_context_chars, output, feedback, self.cfg.context_view),
+                                               self.cfg.max_context_chars, output, feedback, self.cfg.context_view,
+                                               self.lessons),
                              step=step, phase="impl", attempt=n,
                              num_predict=self.cfg.num_predict_body if step.signature else self.cfg.num_predict,
                              stop=BODY_STOP if step.signature else None, bump=0.15 * repeats,
@@ -2371,7 +2814,7 @@ class Runner:
                 files = {p: tidy_python(c) if p.endswith(".py") else c for p, c in files.items()}
             if problems:
                 feedback = _bullets(problems)
-                self.log(f"   impl attempt {n}: {problems[0]}")
+                self._note(f"impl attempt {n}: {problems[0]}")
                 continue
             key = "\n".join(f"{p}\n{(function_body(files[p], _function_name(step)) if step.signature and p == module_path(step) else None) or files[p]}"
                             for p in sorted(files))
@@ -2383,15 +2826,17 @@ class Runner:
                 if step.signature:
                     note = _missing_lines_note(step.description, function_body(files[module_path(step)], _function_name(step)) or "")
                     feedback += "\nAlso: " + note if note else ""
-                self.log(f"   impl attempt {n}: same code as attempt {seen[key]}; not re-running, asking for a different one")
+                self._note(f"impl attempt {n}: same code as attempt {seen[key]}; not re-running, asking for a different one")
                 continue
             seen[key] = n
+            if step.signature:
+                self._tried.append(function_body(files[module_path(step)], _function_name(step)) or "")
             self._write(files)
             self._write(tests)
             problems = self._static_check(list(files))
             if problems:
                 feedback = _bullets(problems)
-                self.log(f"   impl attempt {n}: static check: {problems[0]}")
+                self._note(f"impl attempt {n}: static check: {problems[0]}")
                 continue
             feedback = None
             res = self._run_tests()
@@ -2400,12 +2845,78 @@ class Runner:
             broken = diagnose_broken_tests(res.output)
             if broken:
                 raise _TestsBroken(broken)
-            output = res.output
+            output = self._last_output = res.output
             if step.signature:                           # name the recipe lines the body left out or rewrote
                 feedback = _missing_lines_note(step.description, function_body(files[module_path(step)], _function_name(step)) or "")
-            self.log(f"   impl attempt {n}: tests still failing")
+            self._note(f"impl attempt {n}: tests still failing")
+        if step.signature and self.cfg.rescue:
+            self._last_output = output
+            via = self._rescue(step, tests, output)
+            if via:
+                self._via = via
+                return
+            output = self._last_output
         tail = output.strip().splitlines()[-1] if output.strip() else ""
-        raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts. Last line: {tail}")
+        raise _Fail(f"tests still failing after {self.cfg.max_attempts} attempts"
+                    + (f" and {self.cfg.rescue_attempts} repair tries" if step.signature and self.cfg.rescue else "")
+                    + f". Last line: {tail}")
+
+    # ------------------------------------------------------------------ the rescue ladder
+    def _try_reply(self, step: Step, tests: dict[str, str], text: str) -> tuple[bool, str, str | None]:
+        """Apply a reply (a model's, or a body the harness built) the way the main loop does.
+        Returns (tests passed, test output or the problem, the body)."""
+        files, problems = self._collect(text, (module_path(step),), check_syntax=False)
+        if not problems:
+            inits = {f: self._read_many([f])[f] for f in step.files if f.endswith("__init__.py")}
+            files, problems = assemble_files(step, files, inits, self._read_many(step_context(step)))
+        if not problems:
+            problems += self._lint_impl(step, files)
+        if not problems and self.cfg.tidy_code:
+            files = {p: tidy_python(c) if p.endswith(".py") else c for p, c in files.items()}
+        if problems:
+            return False, _bullets(problems), None
+        body = function_body(files[module_path(step)], _function_name(step))
+        self._write(files)
+        self._write(tests)
+        problems = self._static_check(list(files))
+        if problems:
+            return False, _bullets(problems), body
+        res = self._run_tests()
+        if res.ok:
+            return True, res.output, body
+        broken = diagnose_broken_tests(res.output)
+        if broken:
+            raise _TestsBroken(broken)
+        return False, res.output, body
+
+    def _rescue(self, step: Step, tests: dict[str, str], output: str) -> str | None:
+        """The normal attempts failed. 1) the recipe itself, if every line of it is code; 2) a different prompt:
+        'repair this draft'. Returns how it was solved, or None."""
+        path = module_path(step)
+        draft = self._tried[-1] if self._tried else ""
+        body = compile_recipe(step.description)
+        if body:
+            self._note("trying the steps of the description as code")
+            ok, out, got = self._try_reply(step, tests, f"FILE: {path}\n```python\n{body}\n```")
+            if ok:
+                return "recipe"
+            draft, output = got or body, out
+            self._note("the steps as code do not pass the tests either")
+        for n in range(1, self.cfg.rescue_attempts + 1):
+            existing = self._read_many((*step.files, *step_context(step)))
+            text = self._ask(build_rescue_prompt(self.plan, step, tests, existing, self.cfg.max_context_chars, draft, output,
+                                                 self.cfg.context_view, self.lessons),
+                             step=step, phase="repair", attempt=n, num_predict=self.cfg.num_predict_body, stop=BODY_STOP,
+                             bump=0.1 * (n - 1), think=False if (self.cfg.think and not self.cfg.think_body) else None)
+            ok, out, got = self._try_reply(step, tests, text)
+            if ok:
+                return "repair prompt"
+            self._note(f"repair attempt {n}: " + (out.strip().splitlines()[-1] if out.strip() else "no answer"))
+            if got:
+                self._tried.append(got)
+                draft, output = got, out
+            self._last_output = out
+        return None
 
     # ------------------------------------------------------------------ pieces
     def _reset_skeleton(self, step: Step, tests: dict[str, str], output: str) -> tuple[str, bool]:
@@ -3164,6 +3675,15 @@ def cmd_consolidate(args, out, **_):
         return EXIT_USAGE
     package, groups = load_groups(args.groups)
     ws = Workspace(Path(args.workspace).expanduser(), Config().max_file_bytes)
+    consolidate_workspace(ws, package, groups, tidy=not args.no_tidy, commit=not args.no_commit,
+                          dry_run=args.dry_run, out=out)
+    return EXIT_OK
+
+
+def consolidate_workspace(ws: Workspace, package: str, groups: dict[str, list[str]], *, tidy: bool = True,
+                          commit: bool = True, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
+    """Merge the modules of `package` in `ws` as `groups` says; tests must pass before and after, with the same
+    number of tests, or every file is put back. Returns the short hash of the commit (or None)."""
     pkg_dir = ws.root / package
     if not pkg_dir.is_dir():
         raise ConsolidateError(f"{pkg_dir} is not a directory")
@@ -3175,7 +3695,7 @@ def cmd_consolidate(args, out, **_):
             tests[old] = t.read_text(encoding="utf-8")
     init_path = pkg_dir / "__init__.py"
     result = consolidate_sources(package, groups, modules, tests,
-                                 init_path.read_text(encoding="utf-8") if init_path.is_file() else None, tidy=not args.no_tidy)
+                                 init_path.read_text(encoding="utf-8") if init_path.is_file() else None, tidy=tidy)
     out(f"consolidate: {package}")
     for new, olds, names in result.summary:
         out(f"  {new}.py  <-  {', '.join(olds)}   ({len(names)} name{'s' if len(names) != 1 else ''})")
@@ -3183,12 +3703,12 @@ def cmd_consolidate(args, out, **_):
         out(f"  left as they are: {', '.join(result.untouched)}")
     n_before = sum(len(o) for o in groups.values())
     out(f"  modules {n_before} -> {len(groups)}")
-    if args.dry_run:
+    if dry_run:
         out("[dry run] nothing was written")
-        return EXIT_OK
-    if (ws.root / ".git").exists() and not args.no_commit:
-        if _run(ws.root, "status", "--porcelain"):
-            raise ConsolidateError("the workspace has uncommitted changes; commit or stash them first (or use --no-commit)")
+        return None
+    git = (ws.root / ".git").exists() and commit
+    if git and _run(ws.root, "status", "--porcelain"):
+        raise ConsolidateError("the workspace has uncommitted changes; commit or stash them first (or use --no-commit)")
     before_passed, before_bad, before_line = _pytest_passed(ws.root)
     if before_bad or before_passed == 0:
         raise ConsolidateError(f"the tests do not pass before consolidating ({before_line}); fix that first")
@@ -3210,10 +3730,593 @@ def cmd_consolidate(args, out, **_):
     out(f"  tests: {before_passed} passed before, {after_passed} passed after")
     (ws.root / DIR).mkdir(exist_ok=True)
     (ws.root / DIR / MARKER).write_text(json.dumps({"package": package, "modules": groups}, indent=2), encoding="utf-8")
-    if (ws.root / ".git").exists() and not args.no_commit:
+    short = None
+    if git:
         short = commit_paths(ws.root, touched, f"refactor: consolidate {n_before} modules into {len(groups)}")
         out(f"  committed {short} on branch {current_branch(ws.root)}   (undo: git reset --hard HEAD~1)")
     out("done. Do not rerun the plans in this workspace; to rebuild, use a new workspace.")
+    return short
+
+
+# ==========================================================================
+# failures and fixes
+# A step that cannot be rescued is parked (the run goes on) and written into FAILURES.md: a file that can be pasted
+# into ANY AI chat. The AI answers with a "fix pack" (JSON); `codeagent fix` applies it; the next run picks it up.
+# ==========================================================================
+
+class FixError(Exception):
+    pass
+
+
+@dataclass
+class StepFailure:
+    plan_title: str
+    plan_path: str
+    step: Step
+    reason: str
+    detail: dict
+
+    @property
+    def id(self) -> str:
+        return f"{_slug_title(self.step.title)[:40]}-{hashlib.sha1((self.plan_title + self.step.title).encode()).hexdigest()[:6]}"
+
+
+BLOCKED_PREFIX = "the step description names"
+
+
+def collect_failures(plan: Plan, plan_path: str | Path, results: list[StepResult]) -> tuple[list[StepFailure], list[str]]:
+    """(failures that need a fix, titles of steps only waiting for a file another failed step should have made)."""
+    by_title = {s.title: s for s in plan.steps}
+    failures, blocked = [], []
+    for r in results:
+        if r.status != "failed" or r.title not in by_title:
+            continue
+        if r.reason.startswith(BLOCKED_PREFIX):
+            blocked.append(r.title)
+        else:
+            failures.append(StepFailure(plan.title, str(plan_path), by_title[r.title], r.reason, r.detail))
+    return failures, blocked
+
+
+FIX_PACK_FORMAT = '''\
+```json
+{
+  "fixes": [
+    {
+      "failure": "<the failure id from this file>",
+      "plan_step": {
+        "description": "the rewritten recipe (code-shaped lines, see the rules above)",
+        "examples": [ {"args": [1], "expect": 2} ]
+      },
+      "body": "optional: the exact function body, if you are sure of it",
+      "lessons": ["optional: one short rule the model must follow in every later step"],
+      "scope": "project"
+    }
+  ]
+}
+```
+Only these keys are allowed. `plan_step` may contain `description`, `examples`, `signature`, `context`, `commit` (never `title`);
+include only what changes. `body` is the function body only (no `def` line). `scope` is `project` (default) or `global`
+(the lesson then applies to every project). Reply with the JSON object and nothing else.'''
+
+RECIPE_RULES = '''\
+- Write the algorithm as a recipe of tiny statements: a numbered list, every variable named, real Python expressions.
+- One statement per line. A loop is its own line (`For each item in cart:`), its statements are `-` bullets below it.
+  Never put a `for` and an `if` on one line, never join two statements with `and` or `;`.
+- Write conditions as code, not English: `2. if len(text) <= limit: return text`.
+- Never reassign a parameter (`category = category.strip()`); use a new name (`cleaned = category.strip()`).
+- Assign the result of a helper call even if only its error matters: `found = find_transaction(items, id)`.
+- A standard-library import is its own first line: `1. import re`.
+- At most 6 numbered lines and one loop; split a bigger function into two steps.
+- Check every example by hand: the examples are the tests, a wrong example makes the step impossible.
+- For ties ("first wins") prefer a loop with a strict `>` over `sorted(..., key=lambda ...)` with a negated key.'''
+
+
+def render_failure_report(project: str, failures: list[StepFailure], blocked: list[str]) -> str:
+    out = [f"# Help the local code agent: {len(failures)} failing step{'s' if len(failures) != 1 else ''} in {project}", "",
+           "Paste this whole file into an AI chat (any AI) and ask it to fix the steps. It must answer with ONE JSON object,",
+           "a *fix pack*, in the format at the bottom. Then, in the terminal:", "",
+           "    codeagent fix fix.json            # or:  codeagent fix -   (paste the JSON, then press Ctrl-D)",
+           "    codeagent build project.json      # the same command as before; it continues where it stopped", "",
+           "## How the agent works (so the fix fits it)", "",
+           "- A small local model (about 0.8B parameters) writes one function body per step. The agent writes the tests from",
+           "  the step's `examples`: the examples are the only specification, so they must be right.",
+           "- The model sees the step `description`, the `def` line, the examples, the *signatures* of helper functions and",
+           "  some rules learned from earlier fixes. It copies recipe lines literally, and often drops or rewrites a line it",
+           "  thinks is optional. It had several normal attempts, the recipe itself as code, and a repair prompt.", "",
+           "## Rules for a description it can follow", "", RECIPE_RULES, "", "## Failing steps", ""]
+    for i, f in enumerate(failures, 1):
+        d = f.detail or {}
+        step_json = json.dumps({k: v for k, v in asdict(f.step).items() if v not in (None, [], "")}, indent=2, ensure_ascii=False)
+        out += [f"### {i}. {f.step.title}", "", f"- failure id: `{f.id}`", f"- plan: `{f.plan_path}` (plan title: {f.plan_title})",
+                f"- why it stopped: {f.reason}", "", "The step as it is in the plan:", "", "```json", step_json, "```", ""]
+        bodies = d.get("bodies") or []
+        if bodies:
+            out += ["What the model wrote in its last attempts (oldest first):", ""]
+            for n, body in enumerate(bodies, 1):
+                out += [f"attempt {n}:", "```python", body.strip("\n")[:1500], "```", ""]
+        if d.get("output"):
+            out += ["What the tests reported for the last attempt:", "", "```", "\n".join(d["output"].strip().splitlines()[-25:])[:2500], "```", ""]
+        if d.get("notes"):
+            out += ["What the agent noticed:", ""] + [f"- {n}" for n in d["notes"]] + [""]
+        note = _missing_lines_note(f.step.description, bodies[-1] if bodies else "")
+        if note:
+            out += ["Recipe lines missing from the last attempt:", "", note.split(":\n", 1)[-1], ""]
+    if blocked:
+        out += ["## Waiting (no fix needed)", "", "These steps only wait for a file that a failing step above should create:", ""]
+        out += [f"- {t}" for t in blocked] + [""]
+    out += ["## The fix pack", "", "Fix the steps above, preferably by rewriting `plan_step.description` (and `examples` if one of them is",
+            "wrong), keeping the step's title. Add a `lesson` when the same mistake could happen in other steps.", "",
+            FIX_PACK_FORMAT, ""]
+    return "\n".join(out)
+
+
+def write_failure_reports(root: str | Path, project: str, failures: list[StepFailure], blocked: list[str]) -> Path | None:
+    """Writes .codeagent/FAILURES.md and the id registry `codeagent fix` uses; removes both when nothing failed."""
+    root = Path(root)
+    report, index = root / DIR / "FAILURES.md", root / DIR / "failures.json"
+    if not failures:
+        for p in (report, index):
+            p.unlink(missing_ok=True)
+        return None
+    (root / DIR).mkdir(exist_ok=True)
+    report.write_text(render_failure_report(project, failures, blocked), encoding="utf-8")
+    index.write_text(json.dumps({f.id: {"plan_file": f.plan_path, "step_title": f.step.title, "plan_title": f.plan_title}
+                                 for f in failures}, indent=2), encoding="utf-8")
+    return report
+
+
+def extract_json(text: str) -> object:
+    """The JSON in an AI's reply: bare, or inside a ``` fence, or with words around it."""
+    text = text.strip()
+    candidates = [text] + re.findall(r"```(?:json)?\s*(.*?)```", text, re.S)
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start:end + 1])
+    for c in candidates:
+        try:
+            return json.loads(c.strip())
+        except json.JSONDecodeError:
+            continue
+    raise FixError("that is not JSON. Paste the fix pack exactly as the AI wrote it (the { ... } part).")
+
+
+PLAN_STEP_KEYS = {"description", "examples", "signature", "context", "commit"}
+FIX_KEYS = {"failure", "plan_step", "body", "lessons", "scope"}
+
+
+def apply_fix_pack(root: str | Path, text: str, *, now: Callable[[], str] = lambda: time.strftime("%Y%m%d-%H%M%S")) -> list[str]:
+    """Validate everything first, then apply: plan edits (with a backup), body overrides, lessons."""
+    root = Path(root)
+    data = extract_json(text)
+    fixes = data.get("fixes") if isinstance(data, dict) and "fixes" in data else [data]
+    if not isinstance(fixes, list) or not fixes or not all(isinstance(f, dict) for f in fixes):
+        raise FixError("the fix pack must be a JSON object with a \"fixes\" list")
+    try:
+        registry = json.loads((root / DIR / "failures.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        registry = {}
+    plan_edits: dict[str, dict] = {}                      # plan file -> parsed json (all edits applied in memory)
+    actions: list[Callable[[], str]] = []
+    messages: list[str] = []
+    for n, fix in enumerate(fixes, 1):
+        label = f"fix {n}"
+        unknown = set(fix) - FIX_KEYS
+        if unknown:
+            raise FixError(f"{label}: unknown key(s) {sorted(unknown)}; allowed: {sorted(FIX_KEYS)}")
+        fid = fix.get("failure")
+        patch = fix.get("plan_step")
+        entry = registry.get(fid) if isinstance(fid, str) else None
+        if fid and entry is None:
+            raise FixError(f"{label}: unknown failure id {fid!r}; the ids are in {root / DIR / 'FAILURES.md'}")
+        if entry is None:
+            title = patch.get("title") if isinstance(patch, dict) else None
+            matches = [e for e in registry.values() if e["step_title"] == title]
+            if len(matches) != 1:
+                raise FixError(f"{label}: say which step it is for with \"failure\": \"<id>\" (see FAILURES.md)")
+            entry = matches[0]
+        step_title = entry["step_title"]
+        if patch is not None:
+            if not isinstance(patch, dict) or set(patch) - PLAN_STEP_KEYS - {"title"}:
+                raise FixError(f"{label}: plan_step may only contain {sorted(PLAN_STEP_KEYS)}")
+            if "title" in patch and patch["title"] != step_title:
+                raise FixError(f"{label}: do not rename the step (it is {step_title!r}); leave `title` out")
+            plan_file = entry["plan_file"]
+            if plan_file not in plan_edits:
+                try:
+                    plan_edits[plan_file] = json.loads(Path(plan_file).read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as e:
+                    raise FixError(f"{label}: cannot read the plan {plan_file}: {e}") from e
+            steps = [s for s in plan_edits[plan_file].get("steps", []) if s.get("title") == step_title]
+            if len(steps) != 1:
+                raise FixError(f"{label}: the step {step_title!r} is not in {plan_file}")
+            steps[0].update({k: v for k, v in patch.items() if k != "title"})
+            messages.append(f"{label}: rewrote {', '.join(sorted(k for k in patch if k != 'title'))} of {step_title!r} in {plan_file}")
+        body = fix.get("body")
+        if body is not None:
+            if not isinstance(body, str) or not body.strip():
+                raise FixError(f"{label}: body must be the function body as text")
+            try:
+                ast.parse("def _f():\n" + textwrap.indent(textwrap.dedent(body), "    "))
+            except SyntaxError as e:
+                raise FixError(f"{label}: the body is not valid Python ({e.msg}, line {e.lineno})") from e
+            target = root / DIR / "overrides" / f"{_slug_title(step_title)}.py"
+            actions.append(lambda target=target, body=body, t=step_title: (
+                target.parent.mkdir(parents=True, exist_ok=True),
+                target.write_text(textwrap.dedent(body).strip("\n") + "\n", encoding="utf-8"),
+                f"saved the body for {t!r}; the next run tries it first")[2])
+        lessons = fix.get("lessons", [])
+        if lessons:
+            if not isinstance(lessons, list) or not all(isinstance(l, str) and l.strip() for l in lessons) or len(lessons) > 5:
+                raise FixError(f"{label}: lessons must be up to 5 short texts")
+            if any(len(l) > 240 for l in lessons):
+                raise FixError(f"{label}: a lesson is longer than 240 characters; make it one short rule")
+            scope = fix.get("scope", "project")
+            if scope not in ("project", "global"):
+                raise FixError(f"{label}: scope must be \"project\" or \"global\"")
+            lessons_file = global_lessons_path() if scope == "global" else root / DIR / "lessons.json"
+            actions.append(lambda lessons=lessons, f=lessons_file, sc=scope: _add_lessons(f, lessons, sc))
+        if patch is None and body is None and not lessons:
+            raise FixError(f"{label}: it changes nothing (needs plan_step, body or lessons)")
+    for plan_file, raw in plan_edits.items():                  # the edited plans must still be valid plans
+        try:
+            plan = parse_plan(json.dumps(raw))
+        except PlanError as e:
+            raise FixError(f"the edited plan {plan_file} would be invalid: {e}") from e
+        for st in plan.steps:
+            messages += [f"warning: {st.title}: {w}" for w in lint_description(st.description)]
+        actions.append(lambda plan_file=plan_file, raw=raw: _write_plan_with_backup(Path(plan_file), raw, now()))
+    return messages + [a() for a in actions]
+
+
+def _write_plan_with_backup(path: Path, raw: dict, stamp: str) -> str:
+    backup = path.with_name(f"{path.name}.bak-{stamp}")
+    shutil.copy2(path, backup)
+    path.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return f"saved {path} (the old one is {backup.name})"
+
+
+def _add_lessons(path: Path, lessons: list[str], scope: str) -> str:
+    try:
+        have = json.loads(path.read_text(encoding="utf-8")).get("lessons", [])
+    except (OSError, json.JSONDecodeError):
+        have = []
+    new = [l.strip() for l in lessons if l.strip() not in have]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"lessons": have + new}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return f"added {len(new)} {scope} lesson{'s' if len(new) != 1 else ''} to {path}"
+
+
+def cmd_fix(args, out, **_):
+    text = sys.stdin.read() if args.fix == "-" else Path(args.fix).read_text(encoding="utf-8")
+    root = _fix_workspace(args)
+    if not (root / DIR / "failures.json").is_file():
+        raise FixError(f"nothing to fix in {root}: no failed steps are recorded there. If you built with --workspace, "
+                       f"pass the same --workspace here.")
+    for line in apply_fix_pack(root, text):
+        out(line)
+    out("done. Run the same `codeagent build ...` command again: it continues with the fixed steps.")
+    return EXIT_OK
+
+
+def _fix_workspace(args) -> Path:
+    if args.workspace:
+        return Path(args.workspace).expanduser()
+    project_file = Path(args.project) if args.project else Path("project.json")
+    if not project_file.is_file():
+        raise FixError("say where the project is: --project project.json (or --workspace DIR); no project.json here")
+    return load_project(project_file).workspace
+
+
+# ==========================================================================
+# project: one command from plans to a published repository
+#   codeagent build project.json
+# creates a PRIVATE repo in your account, builds every plan (rescuing and parking failing steps instead of
+# stopping), consolidates the modules, and publishes - committing as you, with the token from your .env.
+# ==========================================================================
+
+class ProjectError(Exception):
+    pass
+
+
+PROJECT_KEYS = {"name", "description", "plans", "groups", "workspace"}
+
+
+@dataclass
+class Project:
+    name: str
+    repo: str
+    description: str
+    plans: list[Path]
+    groups: Path | None
+    workspace: Path
+    file: Path
+
+
+def load_project(path: str | Path) -> Project:
+    path = Path(path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ProjectError(f"cannot read {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ProjectError(f"{path} is not valid JSON ({e.msg}, line {e.lineno})") from e
+    if not isinstance(raw, dict) or set(raw) - PROJECT_KEYS:
+        raise ProjectError(f"{path}: allowed keys are {sorted(PROJECT_KEYS)}" + (f"; unknown: {sorted(set(raw) - PROJECT_KEYS)}" if isinstance(raw, dict) else ""))
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ProjectError(f"{path}: \"name\" is required (it becomes the repository name, e.g. \"expense-manager\")")
+    plans = raw.get("plans")
+    if not isinstance(plans, list) or not plans or not all(isinstance(p, str) for p in plans):
+        raise ProjectError(f"{path}: \"plans\" must list the plan files in the order they are built")
+    base = path.parent
+    resolved = [(base / p).expanduser() for p in plans]
+    missing = [str(p) for p in resolved if not p.is_file()]
+    if missing:
+        raise ProjectError(f"{path}: plan file not found: {', '.join(missing)}")
+    groups = (base / raw["groups"]).expanduser() if raw.get("groups") else None
+    if groups and not groups.is_file():
+        raise ProjectError(f"{path}: groups file not found: {groups}")
+    repo = repo_name(name)
+    workspace = Path(raw.get("workspace") or Path("~/agent-projects") / repo).expanduser()
+    return Project(name.strip(), repo, str(raw.get("description") or "").strip(), resolved, groups, workspace, path)
+
+
+def _project_state(root: Path) -> dict:
+    try:
+        return json.loads((root / DIR / "project.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_project_state(root: Path, state: dict) -> None:
+    (root / DIR).mkdir(exist_ok=True)
+    (root / DIR / "project.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _readme(project: Project) -> str:
+    return (f"# {project.name}\n\n{project.description + chr(10) * 2 if project.description else ''}"
+            "Built step by step by [codeagent](https://github.com/Yad4o/local-code-agent): a small local model writes "
+            "one function per step, every step is tested and committed on its own.\n")
+
+
+def _init_project_repo(ws: Workspace, project: Project, identity: tuple[str, str] | None) -> None:
+    ws.root.mkdir(parents=True, exist_ok=True)
+    ensure_repo(ws.root)
+    if identity:
+        set_identity(ws.root, *identity)
+    if _run(ws.root, "rev-parse", "--verify", "-q", "HEAD", check=False):
+        return
+    (ws.root / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+    if not (ws.root / "README.md").exists():
+        (ws.root / "README.md").write_text(_readme(project), encoding="utf-8")
+    commit_paths(ws.root, [".gitignore", "README.md"], f"chore: start {project.name}")
+
+
+def _publish(ws: Workspace, secrets: Secrets, state: dict, branch: str, out: Callable[[str], None], *,
+             main: bool) -> bool:
+    """Fast-forward main to the work branch (when asked) and push to GitHub (when there is a repo). Network trouble
+    is a warning: the work is safe locally and the next `build` pushes it. A secret anywhere in the history stops
+    the push for good. Returns True when everything was pushed."""
+    owner, repo = state.get("owner"), state.get("repo")
+    pushing = bool(owner and repo and secrets.token)
+    url = remote_url(secrets, owner, repo) if pushing else ""
+    if pushing:
+        try:
+            preflight_push(ws.root, (secrets.token,))
+        except GitError as e:
+            out(f"NOT PUSHED: {e}")
+            pushing = False
+    try:
+        if pushing:
+            push_ref(ws.root, url, branch, secrets, owner)
+        if main:
+            _run(ws.root, "checkout", "-q", "main")
+            _run(ws.root, "merge", "--ff-only", "-q", branch)
+            if pushing:
+                push_ref(ws.root, url, "main", secrets, owner)
+    except GitError as e:
+        out(f"warning: {secrets.scrub(str(e))}. Your work is safe here; run the same command again to retry.")
+        return False
+    return pushing
+
+
+def cmd_build(args, out, *, llm_factory, guard_factory, **_):
+    cfg = load_config()
+    cfg.stop_on_failure = False                       # a failing step is parked, the run goes on
+    project = load_project(args.project)
+    ws_path = Path(args.workspace).expanduser() if args.workspace else project.workspace
+    secrets = load_secrets(args.env, project.file.parent)
+    plans = [(p, load_plan(p)) for p in project.plans]
+    titles = [pl.title for _, pl in plans]
+    if len(set(titles)) != len(titles):
+        raise ProjectError("two plans have the same title; every plan needs its own title")
+    for _, plan in plans:
+        _check_test_command(cfg, plan)
+    package, groups = None, None
+    if project.groups:
+        package, groups = load_groups(project.groups)
+        created = {st.function.partition(":")[0].split(".")[-1] for _, pl in plans for st in pl.steps}
+        unknown = sorted(m for olds in groups.values() for m in olds if m not in created)
+        if unknown:
+            raise ConsolidateError(f"{project.groups} lists {', '.join(unknown)}, which no plan creates")
+    branch = f"agent/{project.repo}"
+    if args.dry_run:
+        out(f"[dry run] would build '{project.name}' in {ws_path} on branch {branch}, plans in this order:")
+        for _, pl in plans:
+            out(f"  {pl.title}: {len(pl.steps)} steps")
+        out("  then consolidate" + (f" with {project.groups}" if groups else " (one module per plan)")
+            + (", create a private GitHub repo and push" if not args.no_github else ", no GitHub (--no-github)"))
+        return EXIT_OK
+    for w in secrets.warnings:
+        out(f"note: {w}")
+    gh, identity = None, None
+    if not args.no_github:
+        if not secrets.token:
+            out("No GitHub token found. Run:  codeagent setup   (it asks for your token once and saves it in ~/.codeagent.env)\n"
+                "or put GITHUB_TOKEN=... in a .env file next to project.json. To build without GitHub: add --no-github")
+            return EXIT_USAGE
+        gh = GitHub(secrets.token, secrets.get("GITHUB_API_URL") or "https://api.github.com")
+        try:
+            me = gh.whoami()
+        except GitHubError as e:
+            out(f"error: {secrets.scrub(str(e))}")
+            return EXIT_USAGE
+        identity = (secrets.get("GIT_AUTHOR_NAME") or me["name"], secrets.get("GIT_AUTHOR_EMAIL") or me["email"])
+        out(f"GitHub: {me['login']}   commits will be made as {identity[0]} <{identity[1]}>")
+    elif secrets.get("GIT_AUTHOR_NAME") and secrets.get("GIT_AUTHOR_EMAIL"):
+        identity = (secrets.get("GIT_AUTHOR_NAME"), secrets.get("GIT_AUTHOR_EMAIL"))
+    if ws_path.exists() and any(ws_path.iterdir()) and not (ws_path / DIR / "project.json").exists():
+        out(f"error: {ws_path} already has files in it and was not made by `codeagent build`. Use another --workspace.")
+        return EXIT_USAGE
+    ws = Workspace(ws_path, cfg.max_file_bytes)
+    log, close = _make_log(out, ws.root / DIR / "agent.log")
+    stopper = _Stopper()
+    stopper.install()
+    try:
+        try:
+            _init_project_repo(ws, project, identity)
+        except GitError as e:
+            out(f"error: {e}")
+            return EXIT_USAGE
+        state = _project_state(ws.root)
+        if gh and not state.get("repo"):
+            try:
+                data = gh.create_unique_repo(project.repo, project.description or project.name)
+            except GitHubError as e:
+                out(f"error: {secrets.scrub(str(e))}")
+                return EXIT_USAGE
+            owner, _, repo = data["full_name"].partition("/")
+            state = {"owner": owner, "repo": repo, "url": data.get("html_url", f"https://github.com/{owner}/{repo}"),
+                     "main_pushed": False}
+            _save_project_state(ws.root, state)
+            out(f"created the private repository {owner}/{repo}" + ("" if repo == project.repo else f"  (the name {project.repo} was taken)"))
+        elif not state:
+            _save_project_state(ws.root, {"local": True})
+        if state.get("repo"):
+            url = remote_url(secrets, state["owner"], state["repo"])
+            if "origin" in _run(ws.root, "remote", check=False).split():
+                _run(ws.root, "remote", "set-url", "origin", url)
+            else:
+                _run(ws.root, "remote", "add", "origin", url)
+            if not state.get("main_pushed"):
+                try:
+                    preflight_push(ws.root, (secrets.token or "",))
+                    push_ref(ws.root, url, "main", secrets, state["owner"])
+                    state["main_pushed"] = True
+                    _save_project_state(ws.root, state)
+                except GitError as e:
+                    out(f"warning: could not push main yet ({secrets.scrub(str(e))})")
+        if (ws.root / DIR / MARKER).exists():
+            out("this project is already built and consolidated.")
+            _publish(ws, secrets, state, branch, out, main=not args.no_main)
+            return EXIT_OK
+        llm = llm_factory(cfg)
+        failures: list[StepFailure] = []
+        blocked: list[str] = []
+        rescued: list[str] = []
+        for plan_path, plan in plans:
+            for st in plan.steps:
+                for w in lint_description(st.description):
+                    log(f"note: {plan.title} / {st.title}: {w}")
+            runner = Runner(cfg, plan, ws, llm, guard=guard_factory(cfg, ws.root) if guard_factory else None, log=log,
+                            should_stop=stopper, live=LivePrinter() if args.live else None, branch=branch, plan_path=plan_path)
+            report = runner.run()
+            out(report.summary())
+            if report.outcome == "paused":
+                out("paused. Run the same command again to continue.")
+                return EXIT_PAUSED
+            rescued += [f"{r.title} ({r.via})" for r in report.results if r.status == "done" and r.via]
+            f, b = collect_failures(plan, plan_path, report.results)
+            failures += f
+            blocked += b
+            _publish(ws, secrets, state, branch, out, main=False)
+        report_file = write_failure_reports(ws.root, project.name, failures, blocked)
+        if failures:
+            out("")
+            out(f"{len(failures)} step{'s' if len(failures) != 1 else ''} could not be built even with the repair tries"
+                + (f" (and {len(blocked)} waiting for them)" if blocked else "") + ". The rest of the project is built and saved.")
+            for f in failures:
+                out(f"  - {f.step.title}")
+            out(f"\nTo fix it:\n  1. Open {report_file}\n  2. Paste the whole file into any AI chat; it replies with a fix pack (JSON)\n"
+                f"  3. Save the reply as fix.json and run:  codeagent fix fix.json --workspace {ws.root}\n"
+                f"  4. Run again:  codeagent build {args.project}" + (f" --workspace {ws.root}" if args.workspace else ""))
+            return EXIT_FAILED
+        if not args.no_consolidate:
+            try:
+                use_groups = groups
+                if use_groups is None:
+                    suggested = suggest_groups([pl for _, pl in plans])
+                    package, use_groups = suggested["package"], suggested["modules"]
+                consolidate_workspace(ws, package, use_groups, tidy=True, commit=True, out=out)
+            except ConsolidateError as e:
+                out(f"warning: the modules were not merged ({e}). The project itself is built; fix the groups and run: "
+                    f"codeagent consolidate GROUPS.json --workspace {ws.root}")
+        published = _publish(ws, secrets, state, branch, out, main=not args.no_main)
+        out("")
+        out(f"DONE: {sum(len(pl.steps) for _, pl in plans)} steps built in {ws.root}")
+        if rescued:
+            out(f"      {len(rescued)} needed help: " + "; ".join(rescued))
+        if state.get("url") and published:
+            out(f"      {state['url']}   (private, branch main)")
+        elif state.get("url"):
+            out(f"      {state['url']}   (not pushed yet: run the same command again)")
+        return EXIT_OK
+    except WorkspaceBusy as e:
+        out(str(e))
+        return EXIT_BUSY
+    except KeyboardInterrupt:
+        out("aborted")
+        return 130
+    finally:
+        stopper.restore()
+        close()
+
+
+def cmd_setup(args, out, **_):
+    """Ask for the GitHub token once, check it, and save it in a private file (mode 600)."""
+    path = Path(args.env or Path.home() / ".codeagent.env").expanduser()
+    token = getpass.getpass("Paste your GitHub token (nothing is shown while you type): ").strip() \
+        if sys.stdin.isatty() else sys.stdin.readline().strip()
+    if not token:
+        out("no token given")
+        return EXIT_USAGE
+    api = (os.environ.get("GITHUB_API_URL") or "https://api.github.com")
+    try:
+        me = GitHub(token, api).whoami()
+    except GitHubError as e:
+        out(f"error: {e}".replace(token, "***"))
+        return EXIT_USAGE
+    values = parse_dotenv(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    values["GITHUB_TOKEN"] = token
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
+    path.chmod(0o600)
+    out(f"saved to {path} (only you can read it)")
+    out(f"signed in as {me['login']}; commits will be made as {me['name']} <{me['email']}>")
+    if me["scopes"] and "repo" not in me["scopes"]:
+        out("warning: this token does not have the `repo` scope, so creating private repositories will fail. "
+            "Make a classic token with `repo` ticked.")
+    return EXIT_OK
+
+
+def cmd_whoami(args, out, **_):
+    secrets = load_secrets(args.env, None)
+    if not secrets.token:
+        out("no token found: run  codeagent setup")
+        return EXIT_USAGE
+    try:
+        me = GitHub(secrets.token, secrets.get("GITHUB_API_URL") or "https://api.github.com").whoami()
+    except GitHubError as e:
+        out(f"error: {secrets.scrub(str(e))}")
+        return EXIT_USAGE
+    out(f"signed in as {me['login']}")
+    out(f"commits are made as {secrets.get('GIT_AUTHOR_NAME') or me['name']} <{secrets.get('GIT_AUTHOR_EMAIL') or me['email']}>")
+    out("token scopes: " + (", ".join(me["scopes"]) if me["scopes"] else "(not shown; a fine-grained token)"))
+    for f in secrets.files:
+        out(f"read: {f}")
+    for w in secrets.warnings:
+        out(f"note: {w}")
     return EXIT_OK
 
 
@@ -3278,6 +4381,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--no-tidy", action="store_true", help="keep unused `x = f(...)` assignments as they are")
     sp.add_argument("--no-commit", action="store_true", help="change the files but do not commit")
+    sp = sub.add_parser("build", help="build a whole project: every plan, then merge the modules and publish to a private GitHub repo")
+    sp.add_argument("project", help="project.json")
+    sp.add_argument("--workspace"); sp.add_argument("--env", help="a .env file with GITHUB_TOKEN (default: see README)")
+    sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--live", action="store_true")
+    sp.add_argument("--no-github", action="store_true", help="build and commit locally only")
+    sp.add_argument("--no-consolidate", action="store_true", help="keep one module per function")
+    sp.add_argument("--no-main", action="store_true", help="push the work branch only; leave main alone")
+    sp = sub.add_parser("fix", help="apply a fix pack (JSON from an AI chat) to the failing steps")
+    sp.add_argument("fix", help="fix.json, or - to read it from the terminal (paste, then Ctrl-D)")
+    sp.add_argument("--project", help="project.json (default: ./project.json)"); sp.add_argument("--workspace")
+    sp = sub.add_parser("setup", help="save your GitHub token once (asks for it, checks it, saves it in ~/.codeagent.env)")
+    sp.add_argument("--env", help="where to save it (default: ~/.codeagent.env)")
+    sp = sub.add_parser("whoami", help="show which GitHub account and commit identity are used")
+    sp.add_argument("--env")
     sp = sub.add_parser("run", help="build a plan")
     sp.add_argument("plan"); sp.add_argument("--workspace"); sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--live", action="store_true",
@@ -3286,7 +4403,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"template": cmd_template, "check": cmd_check, "doctor": cmd_doctor,
-            "smoke": cmd_smoke, "run": cmd_run, "consolidate": cmd_consolidate}
+            "smoke": cmd_smoke, "run": cmd_run, "consolidate": cmd_consolidate, "build": cmd_build, "fix": cmd_fix,
+            "setup": cmd_setup, "whoami": cmd_whoami}
 
 
 def _silence_stdout() -> None:
@@ -3301,7 +4419,7 @@ def main(argv=None, *, llm_factory=make_client, guard_factory=None, out=print) -
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](args, out, llm_factory=llm_factory, guard_factory=guard_factory)
-    except (ConfigError, PlanError, ConsolidateError, GitError, WorkspaceError) as e:
+    except (ConfigError, PlanError, ConsolidateError, GitError, WorkspaceError, ProjectError, FixError, GitHubError) as e:
         out(f"error: {e}")
         return EXIT_USAGE
     except BrokenPipeError:                      # e.g. `codeagent template | head`
