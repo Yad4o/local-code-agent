@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class FakeGitHub:
-    def __init__(self, root: Path, token: str = "tok_test_1234567890", login: str = "octo", name: str = "Octo Cat",
+    def __init__(self, root: Path, token: str = "tok_test_1234567890_abcdefghijklmnop", login: str = "octo", name: str = "Octo Cat",
                  user_id: int = 4242, email: str | None = None, scopes: str = "repo"):
         self.root, self.token, self.login, self.name, self.user_id, self.email = root, token, login, name, user_id, email
         self.scopes = scopes

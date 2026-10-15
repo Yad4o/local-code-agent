@@ -313,7 +313,7 @@ def test_setup_checks_the_token_and_saves_it_privately(env, monkeypatch):
 def test_setup_refuses_a_bad_token_and_saves_nothing(env, monkeypatch):
     target = env.tmp / "saved.env"
     monkeypatch.setenv("GITHUB_API_URL", env.gh.api_url)
-    monkeypatch.setattr(sys, "stdin", io.StringIO("nope_nope_nope\n"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("nope_nope_nope_nope_nope_nope\n"))
     code, text = run(["setup", "--env", str(target)])
     assert code == 2 and "rejected the token" in text and not target.exists()
 
@@ -357,3 +357,48 @@ def test_the_whole_expense_manager_builds_as_one_project_with_one_command(env):
     assert len(git(bare, "log", "main", "--format=%s").splitlines()) == 40                  # start + 38 steps + the merge commit
     result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=env.tmp / "ws", capture_output=True, text=True)
     assert result.returncode == 0 and "132 passed" in result.stdout
+
+
+def test_setup_says_what_it_received_and_refuses_a_one_letter_paste_without_calling_github(env, monkeypatch):
+    # real report: only "i" arrived, and the old error message turned every "i" in its own text into ***
+    target = env.tmp / "saved.env"
+    monkeypatch.setenv("GITHUB_API_URL", env.gh.api_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("i\n"))
+    code, text = run(["setup", "--env", str(target)])
+    assert code == 2 and "received 1 character, starting with 'i'" in text and "far too short" in text
+    assert "codeagent setup --visible" in text and "GitHub" in text and "***" not in text
+    assert not target.exists() and not env.gh.requests
+
+
+def test_a_rejected_token_message_is_never_garbled(env, monkeypatch):
+    target = env.tmp / "saved.env"
+    monkeypatch.setenv("GITHUB_API_URL", env.gh.api_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("ghp_" + "x" * 36 + "\n"))
+    code, text = run(["setup", "--env", str(target)])
+    assert code == 2 and "GitHub rejected the token (401 bad credentials)" in text and "***" not in text
+
+
+@pytest.mark.parametrize("pasted", [
+    "\x1b[200~@@T@@\x1b[201~", "GITHUB_TOKEN=@@T@@", "export GITHUB_TOKEN='@@T@@'", '  "@@T@@"  ', "^[[200~@@T@@^[[201~",
+])
+def test_setup_cleans_what_a_terminal_paste_adds_around_the_token(env, monkeypatch, pasted):
+    target = env.tmp / "saved.env"
+    monkeypatch.setenv("GITHUB_API_URL", env.gh.api_url)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(pasted.replace("@@T@@", env.gh.token) + "\n"))
+    code, text = run(["setup", "--env", str(target)])
+    assert code == 0 and target.read_text() == f"GITHUB_TOKEN={env.gh.token}\n"
+
+
+def test_setup_visible_reads_with_input(env, monkeypatch):
+    target = env.tmp / "saved.env"
+    monkeypatch.setenv("GITHUB_API_URL", env.gh.api_url)
+    monkeypatch.setattr("builtins.input", lambda prompt="": env.gh.token)
+    code, text = run(["setup", "--visible", "--env", str(target)])
+    assert code == 0 and "signed in as octo" in text and target.exists()
+
+
+def test_a_short_token_never_garbles_error_messages_from_github(env):
+    from agent import GitHub, GitHubError
+    with pytest.raises(GitHubError) as err:
+        GitHub("i", env.gh.api_url).whoami()
+    assert "GitHub rejected the token" in str(err.value)
