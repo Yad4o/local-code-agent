@@ -195,6 +195,79 @@ Defaults are tuned for a 2 GB GPU / 12 GB RAM laptop. There is no config file ye
   logged, and the plan can be re-run. Smaller steps and clearer examples help most; a bigger local model
   needs only a different `CODEAGENT_MODEL`.
 
+## Build a whole project with one command
+
+```bash
+codeagent setup                      # once: asks for your GitHub token (hidden), checks it, saves ~/.codeagent.env (mode 600)
+codeagent check plan-1.json          # optional: validate a plan, prints warnings
+codeagent build project.json         # the one command
+```
+
+`project.json` (an AI writes it for you, see `docs/PLAN_GUIDE_FOR_AI.md`; example: `examples/expense_project.json`):
+
+```json
+{"name": "expense-manager", "description": "One sentence.", "plans": ["plan-1.json", "plan-2.json"], "groups": "groups.json"}
+```
+
+`build` does, by itself and in this order:
+
+1. checks your token and finds your GitHub account; commits are made as **you** (name from GitHub or `GIT_AUTHOR_NAME`,
+   email = your `@users.noreply.github.com` address or `GIT_AUTHOR_EMAIL`), in the project's own git config only;
+2. creates the folder `~/agent-projects/<name>` (or `"workspace"` / `--workspace`), `git init -b main`, a `.gitignore`
+   that keeps `.env`, keys and `.codeagent/` out, a README, and the first commit `chore: start <name>`;
+3. creates a **private** GitHub repository named after the project (`name`, `name-2`, ... if the name is taken; an
+   existing repository is never touched) and pushes `main`;
+4. builds every plan in order on one branch `agent/<name>`, one commit per step, pushing the branch after each plan;
+5. if every step is built: merges the one-module-per-function files into themed modules (`groups.json`, or one module
+   per plan when there is none), re-runs the tests (same number must pass, else nothing changes), commits that;
+6. fast-forwards `main` to the finished work and pushes `main` and the branch.
+
+Run the same command again at any time: it continues where it stopped and never creates a second repository.
+Flags: `--no-github` (build locally only), `--no-main` (push the branch, leave `main` alone), `--no-consolidate`,
+`--dry-run`, `--live`, `--workspace DIR`, `--env FILE`.
+
+### Your token: `.env`
+
+`codeagent setup` is the easy way. By hand, put this in `~/.codeagent.env` (then `chmod 600 ~/.codeagent.env`), or in a
+`.env` next to `project.json`, or pass `--env FILE`:
+
+```
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx      # a classic token with the `repo` scope
+GIT_AUTHOR_NAME=Your Name                  # optional, default: your GitHub name
+GIT_AUTHOR_EMAIL=you@example.com           # optional, default: your GitHub noreply address
+```
+
+Order of lookup (first wins): `--env` file, real environment variables, `$CODEAGENT_ENV`, `.env` next to `project.json`,
+`.env` in the current folder, `~/.codeagent.env`. `codeagent whoami` shows which account and identity will be used.
+The token is only handed to git through a throw-away `GIT_ASKPASS` helper: it is never in a URL, a remote, a log line,
+or the environment of the tests; stored git credentials are ignored on purpose.
+
+### Secrets never reach git
+
+Every commit is scanned first (tokens, private keys, `sk-` keys, hard-coded passwords, files like `.env`, `*.pem`,
+`id_rsa`, `credentials.json`), and before every push the **whole history** is scanned. A finding stops the commit or the
+push and names the file and line. Nothing is ever force-pushed.
+
+### When a step fails: it is parked, not the end
+
+After the normal attempts the agent tries, in order: your recipe lines **as code** (when every line is valid Python the
+function is built from the recipe itself), then a different "repair this draft" prompt, then it parks the step and goes on
+with everything that does not need it. At the end it writes `<workspace>/.codeagent/FAILURES.md`: the steps, what the
+model wrote, the test output and what to answer. Then:
+
+```bash
+# 1. paste FAILURES.md into any AI chat; it answers with a "fix pack" (JSON). Save it as fix.json
+codeagent fix fix.json --workspace ~/agent-projects/<name>      # or:  codeagent fix -   then paste, then Ctrl-D
+codeagent build project.json                                     # continues with the fixed steps
+```
+
+A fix pack can rewrite a step's `description`/`examples` (the plan file is edited, the old one kept as `.bak-...`), supply
+an exact function `body` (tried first on the next run), and add `lessons`: short rules that are put into every later
+prompt (per project, or `"scope": "global"` for all projects). It is validated completely first: a wrong fix pack
+changes nothing. The format is in `FAILURES.md` itself and in section 12 of the guide.
+
+Settings: `CODEAGENT_RESCUE` (default true), `CODEAGENT_RESCUE_ATTEMPTS` (3), `CODEAGENT_MAX_LESSONS` (8).
+
 ## Layout
 
 ```

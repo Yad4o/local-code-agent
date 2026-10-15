@@ -20,9 +20,25 @@ def test_every_example_plan_is_valid(path):
 GUIDE = Path(__file__).parent.parent / "docs" / "PLAN_GUIDE_FOR_AI.md"
 
 
-def test_every_json_block_in_the_ai_guide_is_a_valid_plan():
+def test_every_json_block_in_the_ai_guide_is_valid():
+    import json
     import re
     blocks = re.findall(r"```json\n(.*?)```", GUIDE.read_text(encoding="utf-8"), re.S)
-    assert blocks
+    kinds = {"plan": 0, "project": 0, "groups": 0, "fix pack": 0}
     for block in blocks:
-        assert parse_plan(block).steps
+        data = json.loads(block)
+        if "steps" in data:
+            assert parse_plan(block).steps
+            kinds["plan"] += 1
+        elif "plans" in data:
+            assert set(data) <= {"name", "description", "plans", "groups", "workspace"} and data["name"] and data["plans"]
+            kinds["project"] += 1
+        elif "modules" in data:
+            assert data["package"].isidentifier() and all(isinstance(v, list) and v for v in data["modules"].values())
+            kinds["groups"] += 1
+        elif "fixes" in data:
+            assert set(data["fixes"][0]) <= {"failure", "plan_step", "body", "lessons", "scope"}
+            kinds["fix pack"] += 1
+        else:
+            raise AssertionError(f"a JSON block of an unknown kind: {block[:60]}")
+    assert all(kinds.values()), kinds
