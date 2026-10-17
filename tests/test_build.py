@@ -107,6 +107,7 @@ def test_a_project_is_built_consolidated_and_published_as_the_user_to_a_private_
     assert authors == {"Octo Cat <4242+octo@users.noreply.github.com>|Octo Cat <4242+octo@users.noreply.github.com>"}
     files = git(bare, "ls-tree", "-r", "--name-only", "main").splitlines()
     assert ".gitignore" in files and "README.md" in files and "todo/todo_core.py" in files and "tests/test_todo_core.py" in files
+    assert "ui.py" in files and "wrote ui.py" in text and "python ui.py" in text
     assert not any(f.startswith(".codeagent") or f == ".env" for f in files)
     subjects = git(bare, "log", "main", "--format=%s").splitlines()
     assert subjects[-1] == "chore: start Todo List" and "refactor: consolidate 7 modules into 1" in subjects
@@ -354,7 +355,7 @@ def test_the_whole_expense_manager_builds_as_one_project_with_one_command(env):
     assert sorted(f for f in files if f.startswith("expense_manager/")) == [
         "expense_manager/__init__.py", "expense_manager/budgets.py", "expense_manager/filters.py",
         "expense_manager/formatting.py", "expense_manager/records.py", "expense_manager/reports.py", "expense_manager/validation.py"]
-    assert len(git(bare, "log", "main", "--format=%s").splitlines()) == 40                  # start + 38 steps + the merge commit
+    assert len(git(bare, "log", "main", "--format=%s").splitlines()) == 41                  # start + 38 steps + the merge + the UI
     result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=env.tmp / "ws", capture_output=True, text=True)
     assert result.returncode == 0 and "132 passed" in result.stdout
 
@@ -402,3 +403,27 @@ def test_a_short_token_never_garbles_error_messages_from_github(env):
     with pytest.raises(GitHubError) as err:
         GitHub("i", env.gh.api_url).whoami()
     assert "GitHub rejected the token" in str(err.value)
+
+
+def test_no_ui_leaves_ui_py_out(env):
+    project = make_project(env.tmp)
+    code, text = build(env, project, BuildLLM(plans_of(project), {}), "--no-ui")
+    assert code == 0 and "ui.py" not in text
+    assert "ui.py" not in git(env.gh.repos["todo-list"], "ls-tree", "-r", "--name-only", "main").splitlines()
+
+
+def test_the_generated_ui_of_a_built_project_calls_its_real_functions(env):
+    project = make_project(env.tmp)
+    assert build(env, project, BuildLLM(plans_of(project), {}))[0] == 0
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("built_ui", env.tmp / "ws" / "ui.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    try:
+        assert mod.call("add_task", {"tasks": [], "text": "milk"})["result"] == [{"id": 1, "text": "milk", "done": False}]
+        assert mod.TITLE == "Todo List"
+    finally:
+        for n in [n for n in sys.modules if n == "todo" or n.startswith("todo.")]:
+            del sys.modules[n]
+        if str(env.tmp / "ws") in sys.path:
+            sys.path.remove(str(env.tmp / "ws"))

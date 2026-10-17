@@ -459,7 +459,9 @@ codeagent build project.json             # builds every plan, merges the modules
 ```
 
 `codeagent build` does everything: it creates the private repository, builds the plans in order, rescues or parks
-failing steps instead of stopping, merges the modules with `groups.json`, then pushes the branch and `main`. A
+failing steps instead of stopping, merges the modules with `groups.json`, writes `ui.py` (a generated local web page
+with a form for every function, so a basic UI needs no work from you; a custom, app-specific UI is hand-written glue,
+section 4), then pushes the branch and `main`. A
 rerun continues where it stopped. `codeagent build project.json --no-github` builds locally only.
 
 `codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly (joined
