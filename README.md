@@ -220,11 +220,29 @@ codeagent build project.json         # the one command
 4. builds every plan in order on one branch `agent/<name>`, one commit per step, pushing the branch after each plan;
 5. if every step is built: merges the one-module-per-function files into themed modules (`groups.json`, or one module
    per plan when there is none), re-runs the tests (same number must pass, else nothing changes), commits that;
-6. fast-forwards `main` to the finished work and pushes `main` and the branch.
+6. writes `ui.py`, a small local web UI for the project (see below), and commits it;
+7. fast-forwards `main` to the finished work and pushes `main` and the branch.
 
 Run the same command again at any time: it continues where it stopped and never creates a second repository.
 Flags: `--no-github` (build locally only), `--no-main` (push the branch, leave `main` alone), `--no-consolidate`,
-`--dry-run`, `--live`, `--workspace DIR`, `--env FILE`.
+`--no-ui`, `--dry-run`, `--live`, `--workspace DIR`, `--env FILE`.
+
+### The small UI: `ui.py`
+
+The local model cannot write a UI, but every project here is made of pure functions with known signatures and examples,
+so `build` **generates** one, with no model: a single file, standard library only.
+
+```bash
+cd ~/agent-projects/<name> && python ui.py        # then open http://127.0.0.1:8000   (--port N, --open)
+```
+
+Every public function of the package gets a form (search box on the left). Each box takes JSON (text that is not JSON
+is sent as a plain string), is prefilled from the plan's examples (buttons `example 1..3`), and shows the result or the
+error. A result can be **saved as a variable** (`save result as $name`); type `$name` in any box to use it, so you can
+chain calls (make a record, add it to a list, get a summary). It only listens on 127.0.0.1, refuses other hosts and
+requests without its own header, and can only call the package's functions. For a project built earlier:
+`codeagent ui ~/agent-projects/<name> --plans plan-1.json plan-2.json --title "My App"` (`--run` starts it,
+`--no-commit` leaves git alone). A nicer, app-specific UI is hand-written glue (see the Todo example).
 
 ### Your token: `.env`
 
