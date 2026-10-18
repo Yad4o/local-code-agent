@@ -242,7 +242,23 @@ error. A result can be **saved as a variable** (`save result as $name`); type `$
 chain calls (make a record, add it to a list, get a summary). It only listens on 127.0.0.1, refuses other hosts and
 requests without its own header, and can only call the package's functions. For a project built earlier:
 `codeagent ui ~/agent-projects/<name> --plans plan-1.json plan-2.json --title "My App"` (`--run` starts it,
-`--no-commit` leaves git alone). A nicer, app-specific UI is hand-written glue (see the Todo example).
+`--no-commit` leaves git alone). For a nicer, app-specific page, see the next section.
+
+### A web app built by the model: `app.py`
+
+A UI can be made by the same local model, as ordinary plan steps: pure functions that return HTML strings (a button, a
+row, the list, the page) and handlers that return the new state. Conventions: `render_page(state)` returns the whole page,
+`handle_<action>(state, form)` runs for a form posted to `/<action>`, optional `initial_state()`. When the package has a
+`render_page`, `build` also writes **`app.py`** (a generated, standard-library server: no JavaScript, a strict
+content-security policy, local only, cross-site posts refused, state in `data.json`, which is git-ignored):
+
+```bash
+codeagent build examples/todo_app_project.json      # the Todo core plan + the Todo UI plan (7 + 7 steps)
+cd ~/agent-projects/todo-app && python app.py       # then open http://127.0.0.1:8000
+```
+
+Plan: `tests/examples/todo_ui.json`; how to write such steps: section 13 of `docs/PLAN_GUIDE_FOR_AI.md`. For a project built
+earlier: `codeagent app ~/agent-projects/<name>`.
 
 ### Your token: `.env`
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from agent import lint_description, load_plan, parse_plan
+from agent import lint_description, lint_step, load_plan, parse_plan
 
 ROOT = Path(__file__).parent
 
@@ -46,7 +46,7 @@ EXAMPLES = sorted((ROOT / "examples").glob("*.json"))
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
 def test_every_example_plan_is_free_of_lint_warnings(path):
     for step in load_plan(path).steps:
-        assert lint_description(step.description) == [], step.title
+        assert lint_step(step) == [], step.title
 
 
 def test_every_plan_in_the_ai_guide_is_free_of_lint_warnings():
@@ -54,3 +54,13 @@ def test_every_plan_in_the_ai_guide_is_free_of_lint_warnings():
     for block in (b for b in re.findall(r"```json\n(.*?)```", md, re.S) if '"steps"' in b):
         for step in parse_plan(block).steps:
             assert lint_description(step.description) == [], step.title
+
+
+def test_a_context_entry_that_is_not_a_file_path_is_flagged():
+    # real mistake: context ["ui_button"] instead of ["todo/ui_button.py"]
+    plan = load_plan(ROOT / "examples" / "todo_ui.json")
+    step = next(s for s in plan.steps if s.context)
+    assert lint_step(step) == []
+    from dataclasses import replace
+    bad = replace(step, context=("ui_button",))
+    assert any("not a file path" in w and "ui_button" in w for w in lint_step(bad))

@@ -39,6 +39,13 @@ name in "save result as $" and then use `$name` in any other box (make a record,
 Only your computer can open it. For a project built before this existed:
 `codeagent ui ~/agent-projects/<name> --plans plan-1.json plan-2.json --title "My App" --run`.
 
+## A real page for your app, built by the model (optional)
+
+Ask the AI for a **UI plan** too (the guide, section 13, tells it how). The model then builds the page and the buttons
+as small tested functions, and `build` also writes `app.py`. Try the ready example:
+`codeagent build examples/todo_app_project.json`, then `cd ~/agent-projects/todo-app && python app.py` and open
+http://127.0.0.1:8000. Your data is kept in `data.json` next to it (never committed).
+
 ## Good to know
 
 - Run `build` again any time: it continues and never makes a second repository.
