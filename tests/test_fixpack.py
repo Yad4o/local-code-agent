@@ -29,10 +29,28 @@ def test_failures_are_told_apart_from_steps_that_only_wait_for_a_file():
     plan = parse_plan(examples_plan(signature="slugify(text)"))
     t = plan.steps[0].title
     failed = StepResult(t, "failed", 6, reason="tests still failing after 6 attempts", detail={"bodies": ["x"]})
-    waiting = StepResult(t, "failed", 0, reason="the step description names a/b.py, but it is missing or empty")
+    waiting = StepResult(t, "failed", 0, reason="the step description names a/b.py, but it is missing or empty in the workspace")
     assert [f.step.title for f in collect_failures(plan, "p.json", [failed])[0]] == [t]
-    assert collect_failures(plan, "p.json", [waiting]) == ([], [t])
+    assert collect_failures(plan, "p.json", [waiting], {"a/b.py"}) == ([], [t])            # a failing step should have made a/b.py
     assert collect_failures(plan, "p.json", [StepResult(t, "done", 1)]) == ([], [])
+
+
+def test_a_step_whose_missing_file_no_failing_step_makes_is_a_failure_of_its_own_never_waiting():
+    # real bug: a wrong `context` path left 6 steps "waiting" for nothing and the build still said DONE
+    plan = parse_plan(examples_plan(signature="slugify(text)"))
+    t = plan.steps[0].title
+    orphan = StepResult(t, "failed", 0, reason="the step description names ui_button, but it is missing or empty in the workspace")
+    failures, blocked = collect_failures(plan, "p.json", [orphan])
+    assert [f.step.title for f in failures] == [t] and blocked == []
+
+
+def test_waiting_follows_a_chain_and_works_across_plans():
+    plan = parse_plan(examples_plan(signature="slugify(text)"))
+    t, files = plan.steps[0].title, set()
+    first = StepResult(t, "failed", 6, reason="tests still failing after 6 attempts")
+    assert len(collect_failures(plan, "p.json", [first], files)[0]) == 1 and plan.steps[0].files[1] in files
+    later = StepResult(t, "failed", 0, reason=f"the step description names {plan.steps[0].files[1]}, but it is missing or empty")
+    assert collect_failures(plan, "p2.json", [later], files) == ([], [t])
 
 
 def test_the_report_has_everything_an_ai_needs_and_the_format_to_answer_in(setup):
