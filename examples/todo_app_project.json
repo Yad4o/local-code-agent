@@ -1,8 +1,0 @@
-{
-  "name": "todo-app",
-  "description": "A tiny todo list: the core functions and a small web page, built by a local model.",
-  "plans": [
-    "../tests/examples/todo_core.json",
-    "../tests/examples/todo_ui.json"
-  ]
-}

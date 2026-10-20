@@ -58,7 +58,7 @@ def test_every_plan_in_the_ai_guide_is_free_of_lint_warnings():
 
 def test_a_context_entry_that_is_not_a_file_path_is_flagged():
     # real mistake: context ["ui_button"] instead of ["todo/ui_button.py"]
-    plan = load_plan(ROOT / "examples" / "todo_ui.json")
+    plan = load_plan(ROOT / "examples" / "todo_core.json")
     step = next(s for s in plan.steps if s.context)
     assert lint_step(step) == []
     from dataclasses import replace

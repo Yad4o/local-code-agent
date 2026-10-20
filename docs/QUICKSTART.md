@@ -19,8 +19,6 @@
    It creates a **private** repo named after the project, builds all plans, merges the files into a few modules, and
    pushes. Your commits are made as you. You do nothing else.
 5. **Open the repo** (the link is printed at the end). Clone it: `git clone https://github.com/<you>/<name>`.
-6. **Try the app in your browser:** `cd ~/agent-projects/<name> && python ui.py`, then open http://127.0.0.1:8000
-   (see "The small UI" below).
 
 ## If it says some steps could not be built
 
@@ -31,25 +29,9 @@ The rest of the project is already built and saved. It wrote `FAILURES.md` and t
 3. `codeagent fix fix.json --workspace <the workspace printed by build>`  (or `codeagent fix -`, paste, Ctrl-D)
 4. Run the same `codeagent build ...` command again. It continues with the fixed steps.
 
-## The small UI
-
-`build` also writes `ui.py` into the project: a simple local web page with a form for **every function** of your app.
-Pick a function on the left, fill the boxes (they start filled with an example), press **Run**. To chain steps, type a
-name in "save result as $" and then use `$name` in any other box (make a record, add it to a list, ask for a summary).
-Only your computer can open it. For a project built before this existed:
-`codeagent ui ~/agent-projects/<name> --plans plan-1.json plan-2.json --title "My App" --run`.
-
-## A real page for your app, built by the model (optional)
-
-Ask the AI for a **UI plan** too (the guide, section 13, tells it how). The model then builds the page and the buttons
-as small tested functions, and `build` also writes `app.py`. Try the ready example:
-`codeagent build examples/todo_app_project.json`, then `cd ~/agent-projects/todo-app && python app.py` and open
-http://127.0.0.1:8000. Your data is kept in `data.json` next to it (never committed).
-
 ## Good to know
 
 - Run `build` again any time: it continues and never makes a second repository.
 - `--no-github` builds on your computer only. `--dry-run` shows what would happen. `--no-main` pushes only the work branch.
-  `--no-ui` skips `ui.py`.
 - Secrets are never committed: `.env` is ignored, every commit and the whole history are scanned before a push.
 - The workspace is `~/agent-projects/<name>` unless you pass `--workspace`.

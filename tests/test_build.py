@@ -12,7 +12,6 @@ from agent import SYSTEM_RESCUE, load_plan, main
 from tests.fake_github import FakeGitHub
 from tests.test_runner import block
 from tests.test_todo_example import BODIES
-from tests.todo_ui_refs import UI_BODIES
 
 ROOT = Path(__file__).parent.parent
 FAKE_TOKEN = "ghp_" + "a1B2c3D4e5F6g7H8i9J0" * 2
@@ -108,7 +107,6 @@ def test_a_project_is_built_consolidated_and_published_as_the_user_to_a_private_
     assert authors == {"Octo Cat <4242+octo@users.noreply.github.com>|Octo Cat <4242+octo@users.noreply.github.com>"}
     files = git(bare, "ls-tree", "-r", "--name-only", "main").splitlines()
     assert ".gitignore" in files and "README.md" in files and "todo/todo_core.py" in files and "tests/test_todo_core.py" in files
-    assert "ui.py" in files and "wrote ui.py" in text and "python ui.py" in text
     assert not any(f.startswith(".codeagent") or f == ".env" for f in files)
     subjects = git(bare, "log", "main", "--format=%s").splitlines()
     assert subjects[-1] == "chore: start Todo List" and "refactor: consolidate 7 modules into 1" in subjects
@@ -356,7 +354,7 @@ def test_the_whole_expense_manager_builds_as_one_project_with_one_command(env):
     assert sorted(f for f in files if f.startswith("expense_manager/")) == [
         "expense_manager/__init__.py", "expense_manager/budgets.py", "expense_manager/filters.py",
         "expense_manager/formatting.py", "expense_manager/records.py", "expense_manager/reports.py", "expense_manager/validation.py"]
-    assert len(git(bare, "log", "main", "--format=%s").splitlines()) == 41                  # start + 38 steps + the merge + the UI
+    assert len(git(bare, "log", "main", "--format=%s").splitlines()) == 40                  # start + 38 steps + the merge commit
     result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=env.tmp / "ws", capture_output=True, text=True)
     assert result.returncode == 0 and "132 passed" in result.stdout
 
@@ -406,67 +404,19 @@ def test_a_short_token_never_garbles_error_messages_from_github(env):
     assert "GitHub rejected the token" in str(err.value)
 
 
-def test_no_ui_leaves_ui_py_out(env):
-    project = make_project(env.tmp)
-    code, text = build(env, project, BuildLLM(plans_of(project), {}), "--no-ui")
-    assert code == 0 and "ui.py" not in text
-    assert "ui.py" not in git(env.gh.repos["todo-list"], "ls-tree", "-r", "--name-only", "main").splitlines()
-
-
-def test_the_generated_ui_of_a_built_project_calls_its_real_functions(env):
-    project = make_project(env.tmp)
-    assert build(env, project, BuildLLM(plans_of(project), {}))[0] == 0
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("built_ui", env.tmp / "ws" / "ui.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    try:
-        assert mod.call("add_task", {"tasks": [], "text": "milk"})["result"] == [{"id": 1, "text": "milk", "done": False}]
-        assert mod.TITLE == "Todo List"
-    finally:
-        for n in [n for n in sys.modules if n == "todo" or n.startswith("todo.")]:
-            del sys.modules[n]
-        if str(env.tmp / "ws") in sys.path:
-            sys.path.remove(str(env.tmp / "ws"))
-
-
-def test_a_model_built_web_app_is_written_committed_and_pushed_with_the_project(env):
-    project = ROOT / "examples" / "todo_app_project.json"
-    llm = BuildLLM(plans_of(project), {}, bodies={**BODIES, **UI_BODIES})
-    code, text = build(env, project, llm)
-    assert code == 0, text
-    assert "DONE: 14 steps built" in text and "wrote app.py" in text and "python app.py" in text and "modules 14 -> 2" in text
-    bare = env.gh.repos["todo-app"]
-    files = git(bare, "ls-tree", "-r", "--name-only", "main").splitlines()
-    assert {"app.py", "ui.py", "todo/core.py", "todo/ui.py", ".gitignore"} <= set(files)
-    assert "data.json" not in files and "data.json" in git(bare, "show", "main:.gitignore").splitlines()
-    assert git(bare, "rev-parse", "main") == git(bare, "rev-parse", "agent/todo-app")
-    subjects = git(bare, "log", "main", "--format=%s").splitlines()
-    assert "feat: add the web app (app.py)" in subjects and "feat: add a small local UI (ui.py)" in subjects
-
-
-def test_no_ui_also_leaves_out_the_web_app(env):
-    project = ROOT / "examples" / "todo_app_project.json"
-    code, text = build(env, project, BuildLLM(plans_of(project), {}, bodies={**BODIES, **UI_BODIES}), "--no-ui")
-    assert code == 0 and "app.py" not in text
-    files = git(env.gh.repos["todo-app"], "ls-tree", "-r", "--name-only", "main").splitlines()
-    assert "app.py" not in files and "ui.py" not in files
-
-
 def test_a_plan_with_a_wrong_context_path_fails_the_build_instead_of_saying_done(env):
-    # real bug: context ["ui_button"] left six steps "waiting" for a file nobody makes, yet the build printed DONE
+    # real bug: a wrong `context` entry left steps "waiting" for a file nobody makes, yet the build printed DONE
     proj = env.tmp / "proj"
     proj.mkdir()
-    shutil.copy(ROOT / "tests" / "examples" / "todo_core.json", proj / "todo_core.json")
-    ui = json.loads((ROOT / "tests" / "examples" / "todo_ui.json").read_text())
-    next(st for st in ui["steps"] if st["function"].endswith("render_task"))["context"] = ["ui_button"]
-    (proj / "todo_ui.json").write_text(json.dumps(ui))
-    (proj / "project.json").write_text(json.dumps({"name": "Todo App", "plans": ["todo_core.json", "todo_ui.json"]}))
+    core = json.loads((ROOT / "tests" / "examples" / "todo_core.json").read_text())
+    next(st for st in core["steps"] if st["function"].endswith("add_task"))["context"] = ["ids"]       # not todo/ids.py
+    (proj / "todo_core.json").write_text(json.dumps(core))
+    (proj / "project.json").write_text(json.dumps({"name": "Todo App", "plans": ["todo_core.json"]}))
     project = proj / "project.json"
-    code, text = build(env, project, BuildLLM(plans_of(project), {}, bodies={**BODIES, **UI_BODIES}))
-    assert code == 1 and "DONE:" not in text and "steps built" not in text and "could not be built" in text and "render_task shows one task as a list item" in text
-    assert not (env.tmp / "ws" / "ui.py").exists() and not (env.tmp / "ws" / "app.py").exists()
+    code, text = build(env, project, BuildLLM(plans_of(project), {}))
+    assert code == 1 and "DONE:" not in text and "steps built" not in text and "could not be built" in text
+    assert "add_task adds a new open task" in text
     report = (env.tmp / "ws" / ".codeagent" / "FAILURES.md").read_text(encoding="utf-8")
-    assert "ui_button" in report and "render_task" in report
+    assert '"ids"' in report and "add_task" in report
     bare = env.gh.repos["todo-app"]
     assert git(bare, "log", "main", "--format=%s") == "chore: start Todo App"            # main is not touched

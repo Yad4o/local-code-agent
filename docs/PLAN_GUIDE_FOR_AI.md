@@ -459,9 +459,7 @@ codeagent build project.json             # builds every plan, merges the modules
 ```
 
 `codeagent build` does everything: it creates the private repository, builds the plans in order, rescues or parks
-failing steps instead of stopping, merges the modules with `groups.json`, writes `ui.py` (a generated local web page
-with a form for every function, so a basic UI needs no work from you; a custom, app-specific UI is hand-written glue,
-section 4), then pushes the branch and `main`. A
+failing steps instead of stopping, merges the modules with `groups.json`, then pushes the branch and `main`. A
 rerun continues where it stopped. `codeagent build project.json --no-github` builds locally only.
 
 `codeagent check` also prints `warning:` lines for description lines a small model tends to copy wrongly (joined
@@ -532,34 +530,3 @@ How to choose what to put in it:
 * Add a `lesson` when the mistake could repeat in other steps ("Never reassign a parameter; use a new variable name.").
   One short rule each, at most 5 per fix. Use `"scope": "global"` for rules that hold for every project.
 * Fix every failing step of the report in the same pack (one entry per failure id).
-
----
-
-## 13. A web UI built by the model (optional)
-
-When the user wants a UI, add a **UI plan** (its own plan file, listed after the plan that builds the functions it
-uses). Its steps build pure functions that return HTML; `codeagent build` then generates `app.py`, a small server
-around them (nothing for you to write). Conventions the server relies on:
-
-* `render_page(state) -> str`: the whole HTML page for the current state. **Required**; without it no `app.py` is made.
-* `handle_<action>(state, form) -> new_state`: runs when a form is posted to `/<action>`. `form` is a dict of **text**
-  values (`{"id": "3"}`: convert with `int(...)`). Return the whole new state. Raise `ValueError` or `KeyError` for bad
-  input: the user sees a plain error page.
-* `initial_state() -> state`: optional (the default is `[]`). The state is any JSON value; it is kept in `data.json`
-  (never committed).
-
-How to write the steps (the model writes HTML as strings, so keep every step tiny):
-
-* One small `render_*` function per piece: button, then row, then list, then page; each at most 6 recipe lines.
-  A page is a string join: `return head + "<p>" + summary + "</p>" + form + render_list(tasks)`.
-* HTML attributes in **single quotes** (`<form method='post' action='/done'>`), so the Python recipe lines need no escaping.
-* A button is a tiny form: `<form method='post' action='/done'><input type='hidden' name='id' value='1'><button>Done</button></form>`.
-* **No JavaScript** (the page is served with a policy that blocks it); one inline `<style>` in the head is fine.
-* Escape every user-provided text with `html.escape(...)`; give one example with `<b>x</b>` to prove it.
-* Each `handle_*` is one line that calls a function from the core plan: `1. return add_task(tasks, form["text"])`.
-* The examples hold the exact expected HTML (compute them by running your recipe by hand; keep the HTML short).
-* `context` entries are **file paths** (`todo/ui_button.py`), never module names.
-* Use the same package as the core plan, and in `groups.json` put the UI modules in a group listed **after** the core groups.
-
-A complete example: `tests/examples/todo_ui.json` with `examples/todo_app_project.json`. After `codeagent build`,
-the user runs `python app.py` in the project folder and opens http://127.0.0.1:8000.
