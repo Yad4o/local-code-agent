@@ -1,5 +1,7 @@
 # local-code-agent
 
+[![CI](https://github.com/Yad4o/local-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Yad4o/local-code-agent/actions/workflows/ci.yml)
+
 An **offline, resource-safe coding agent** for small local models (built for a
 laptop with a 2 GB GPU running Ollama + Qwen 0.8B Q4). You write a **structured
 plan**; the agent builds it step by step, the way you pair with an AI: **tests

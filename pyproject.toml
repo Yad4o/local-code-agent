@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = []            # stdlib only: nothing to download, works offline
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-xdist", "ruff"]
 tools = ["ruff"]                 # optional: unused-import removal and undefined-name checks
 
 [project.scripts]
